@@ -2035,7 +2035,50 @@ async function createAndSaveBaseSnapshot(
     }
     const claudeInstallRoot = "/home/vercel-sandbox/.claude-code"
     const localClaudeExecutable = `${claudeInstallRoot}/node_modules/.bin/claude`
+    const localClaudePackageDir = `${claudeInstallRoot}/node_modules/@anthropic-ai/claude-code`
     const localClaudeCliJs = `${claudeInstallRoot}/node_modules/@anthropic-ai/claude-code/cli.js`
+    const localClaudeInstallScript = `${localClaudePackageDir}/install.cjs`
+    const ensureRealNodeShim = [
+      'mkdir -p "/home/vercel-sandbox/.local/bin"',
+      "if ! command -v node >/dev/null 2>&1; then",
+      "  if command -v nodejs >/dev/null 2>&1; then",
+      '    ln -sf "$(command -v nodejs)" /home/vercel-sandbox/.local/bin/node',
+      "  fi",
+      "fi",
+      "command -v node >/dev/null 2>&1"
+    ].join("\n")
+    const resolveInstalledClaudePath = async (): Promise<{ kind: string; path: string } | null> => {
+      const result = await runCmd(
+        "sh",
+        [
+          "-lc",
+          [
+            `if [ -x "${localClaudeExecutable}" ]; then`,
+            `  printf 'local:%s\\n' "${localClaudeExecutable}"`,
+            `elif [ -f "${localClaudeCliJs}" ]; then`,
+            `  printf 'cli-js:%s\\n' "${localClaudeCliJs}"`,
+            "elif command -v claude >/dev/null 2>&1; then",
+            "  printf 'which:%s\\n' \"$(command -v claude)\"",
+            "fi"
+          ].join("\n")
+        ],
+        { env: sharedHomeEnv }
+      )
+      const line =
+        result.stdout
+          .split("\n")
+          .map((entry) => entry.trim())
+          .find(Boolean) || ""
+      if (!line.includes(":")) {
+        return null
+      }
+      const [kind, ...rest] = line.split(":")
+      const resolvedPath = rest.join(":").trim()
+      if (!kind || !resolvedPath) {
+        return null
+      }
+      return { kind, path: resolvedPath }
+    }
     await reportProgress("Preparing shared Claude runtime directory...")
     const sharedRuntimePrep = await runCmd(
       "sh",
@@ -2045,8 +2088,9 @@ async function createAndSaveBaseSnapshot(
           "mkdir -p /home/vercel-sandbox/.local/bin",
           `mkdir -p "${claudeInstallRoot}"`,
           `cd "${claudeInstallRoot}"`,
+          ensureRealNodeShim,
           `if [ ! -f package.json ]; then printf '%s' '{"name":"claude-code-runtime","private":true}' > package.json; fi`
-        ].join(" && ")
+        ].join("\n")
       ],
       { env: sharedHomeEnv }
     )
@@ -2056,29 +2100,95 @@ async function createAndSaveBaseSnapshot(
       )
     }
 
-    await reportProgress("Installing Claude package in shared snapshot...")
-    const sharedRuntimeInstall = await runCmd(
-      "sh",
-      ["-lc", `export PATH="${sharedHomeEnv.PATH}" && cd "${claudeInstallRoot}" && bun add ${CLAUDE_CODE_PACKAGE}`],
-      { env: sharedHomeEnv }
-    )
-    if (sharedRuntimeInstall.exitCode !== 0) {
-      throw new Error(
-        `shared Claude package install failed: stdout=${sharedRuntimeInstall.stdout || "<empty>"} stderr=${sharedRuntimeInstall.stderr || "<empty>"}`
-      )
+    const sharedClaudeInstallErrors: string[] = []
+    let resolvedSharedClaude = await resolveInstalledClaudePath()
+
+    if (!resolvedSharedClaude) {
+      await reportProgress("Installing Claude package in shared snapshot...")
+      const sharedRuntimeInstall = await runCmd("bun", ["add", CLAUDE_CODE_PACKAGE], {
+        cwd: claudeInstallRoot,
+        env: sharedHomeEnv
+      })
+      if (sharedRuntimeInstall.exitCode === 0) {
+        await reportProgress("Running Claude postinstall in shared snapshot...")
+        const sharedRuntimePostinstall = await runCmd("bun", ["./node_modules/@anthropic-ai/claude-code/install.cjs"], {
+          cwd: claudeInstallRoot,
+          env: sharedHomeEnv
+        })
+        if (sharedRuntimePostinstall.exitCode === 0) {
+          resolvedSharedClaude = await resolveInstalledClaudePath()
+        } else {
+          sharedClaudeInstallErrors.push(
+            `bun-local-postinstall: stdout=${sharedRuntimePostinstall.stdout || "<empty>"} stderr=${sharedRuntimePostinstall.stderr || "<empty>"}`
+          )
+        }
+      } else {
+        sharedClaudeInstallErrors.push(
+          `bun-local-add: stdout=${sharedRuntimeInstall.stdout || "<empty>"} stderr=${sharedRuntimeInstall.stderr || "<empty>"}`
+        )
+      }
     }
-    await reportProgress("Running Claude postinstall in shared snapshot...")
-    const sharedRuntimePostinstall = await runCmd(
-      "sh",
-      [
-        "-lc",
-        `export PATH="${sharedHomeEnv.PATH}" && cd "${claudeInstallRoot}" && if command -v nodejs >/dev/null 2>&1; then nodejs "./node_modules/@anthropic-ai/claude-code/install.cjs"; else node "./node_modules/@anthropic-ai/claude-code/install.cjs"; fi`
-      ],
-      { env: sharedHomeEnv }
-    )
-    if (sharedRuntimePostinstall.exitCode !== 0) {
+
+    if (!resolvedSharedClaude) {
+      await reportProgress("Retrying Claude package install with pnpm in shared snapshot...")
+      const sharedRuntimePnpmInstall = await runCmd("pnpm", ["add", CLAUDE_CODE_PACKAGE], {
+        cwd: claudeInstallRoot,
+        env: sharedHomeEnv
+      })
+      if (sharedRuntimePnpmInstall.exitCode === 0) {
+        const sharedRuntimePnpmPostinstall = await runCmd(
+          "sh",
+          [
+            "-lc",
+            `if command -v nodejs >/dev/null 2>&1; then nodejs "${localClaudeInstallScript}"; else node "${localClaudeInstallScript}"; fi`
+          ],
+          { cwd: claudeInstallRoot, env: sharedHomeEnv }
+        )
+        if (sharedRuntimePnpmPostinstall.exitCode === 0) {
+          resolvedSharedClaude = await resolveInstalledClaudePath()
+        } else {
+          sharedClaudeInstallErrors.push(
+            `pnpm-local-postinstall: stdout=${sharedRuntimePnpmPostinstall.stdout || "<empty>"} stderr=${sharedRuntimePnpmPostinstall.stderr || "<empty>"}`
+          )
+        }
+      } else {
+        sharedClaudeInstallErrors.push(
+          `pnpm-local-add: stdout=${sharedRuntimePnpmInstall.stdout || "<empty>"} stderr=${sharedRuntimePnpmInstall.stderr || "<empty>"}`
+        )
+      }
+    }
+
+    if (!resolvedSharedClaude) {
+      await reportProgress("Retrying Claude package install globally in shared snapshot...")
+      const sharedRuntimeGlobalInstall = await runCmd("bun", ["add", "-g", CLAUDE_CODE_PACKAGE], {
+        env: sharedHomeEnv
+      })
+      if (sharedRuntimeGlobalInstall.exitCode === 0) {
+        resolvedSharedClaude = await resolveInstalledClaudePath()
+      } else {
+        sharedClaudeInstallErrors.push(
+          `bun-global: stdout=${sharedRuntimeGlobalInstall.stdout || "<empty>"} stderr=${sharedRuntimeGlobalInstall.stderr || "<empty>"}`
+        )
+      }
+    }
+
+    if (!resolvedSharedClaude) {
+      const sharedClaudeDiagnostics = await runCmd(
+        "sh",
+        [
+          "-lc",
+          [
+            `printf 'cli_exists='; [ -e "${localClaudeExecutable}" ] && printf yes || printf no`,
+            `printf ' cli_exec='; [ -x "${localClaudeExecutable}" ] && printf yes || printf no`,
+            `printf ' cli_js_exists='; [ -f "${localClaudeCliJs}" ] && printf yes || printf no`,
+            `printf ' install_cjs_exists='; [ -f "${localClaudeInstallScript}" ] && printf yes || printf no`,
+            "printf ' which_claude='; command -v claude || true"
+          ].join(" ; ")
+        ],
+        { env: sharedHomeEnv }
+      )
       throw new Error(
-        `shared Claude package postinstall failed: stdout=${sharedRuntimePostinstall.stdout || "<empty>"} stderr=${sharedRuntimePostinstall.stderr || "<empty>"}`
+        `shared Claude runtime install unresolved: ${sharedClaudeInstallErrors.join(" | ")} diagnostics=${sharedClaudeDiagnostics.stdout || sharedClaudeDiagnostics.stderr || "<empty>"}`
       )
     }
 
@@ -2087,29 +2197,28 @@ async function createAndSaveBaseSnapshot(
       "sh",
       [
         "-lc",
-        [
-          "set -e",
-          "cat > /home/vercel-sandbox/.local/bin/claude <<'EOF'",
-          "#!/bin/sh",
-          `if [ -f "${localClaudeCliJs}" ]; then`,
-          "  if command -v nodejs >/dev/null 2>&1; then",
-          `    exec "$(command -v nodejs)" "${localClaudeCliJs}" "$@"`,
-          "  fi",
-          "  if command -v node >/dev/null 2>&1; then",
-          `    exec "$(command -v node)" "${localClaudeCliJs}" "$@"`,
-          "  fi",
-          "  echo 'No Node runtime available for shared snapshot Claude CLI' >&2",
-          "  exit 1",
-          "fi",
-          `if [ -x "${localClaudeExecutable}" ]; then`,
-          `  exec "${localClaudeExecutable}" "$@"`,
-          "fi",
-          "echo 'Claude CLI is unavailable in shared snapshot' >&2",
-          "exit 1",
-          "EOF",
-          "chmod +x /home/vercel-sandbox/.local/bin/claude",
-          "/home/vercel-sandbox/.local/bin/claude --version"
-        ].join("\n")
+        resolvedSharedClaude.kind === "cli-js"
+          ? [
+              "set -e",
+              "cat > /home/vercel-sandbox/.local/bin/claude <<'EOF'",
+              "#!/bin/sh",
+              "if command -v nodejs >/dev/null 2>&1; then",
+              `  exec "$(command -v nodejs)" "${resolvedSharedClaude.path}" "$@"`,
+              "fi",
+              "if command -v node >/dev/null 2>&1; then",
+              `  exec "$(command -v node)" "${resolvedSharedClaude.path}" "$@"`,
+              "fi",
+              "echo 'No Node runtime available for shared snapshot Claude CLI' >&2",
+              "exit 1",
+              "EOF",
+              "chmod +x /home/vercel-sandbox/.local/bin/claude",
+              "/home/vercel-sandbox/.local/bin/claude --version"
+            ].join("\n")
+          : [
+              "set -e",
+              `ln -sf "${resolvedSharedClaude.path}" /home/vercel-sandbox/.local/bin/claude`,
+              "/home/vercel-sandbox/.local/bin/claude --version"
+            ].join("\n")
       ],
       { env: sharedHomeEnv }
     )
