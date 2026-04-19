@@ -2035,6 +2035,7 @@ async function createAndSaveBaseSnapshot(
     }
     const claudeInstallRoot = "/home/vercel-sandbox/.claude-code"
     const localClaudeExecutable = `${claudeInstallRoot}/node_modules/.bin/claude`
+    const localClaudeCliJs = `${claudeInstallRoot}/node_modules/@anthropic-ai/claude-code/cli.js`
     await reportProgress("Preparing shared Claude runtime directory...")
     const sharedRuntimePrep = await runCmd(
       "sh",
@@ -2087,8 +2088,22 @@ async function createAndSaveBaseSnapshot(
       [
         "-lc",
         [
-          `test -x "${localClaudeExecutable}"`,
-          `ln -sf "${localClaudeExecutable}" /home/vercel-sandbox/.local/bin/claude`
+          `cat > /home/vercel-sandbox/.local/bin/claude <<'EOF'`,
+          "#!/bin/sh",
+          `if [ -x "${localClaudeExecutable}" ]; then`,
+          `  exec "${localClaudeExecutable}" "$@"`,
+          "fi",
+          `if [ -f "${localClaudeCliJs}" ]; then`,
+          "  if command -v nodejs >/dev/null 2>&1; then",
+          `    exec "$(command -v nodejs)" "${localClaudeCliJs}" "$@"`,
+          "  fi",
+          `  exec "$(command -v node)" "${localClaudeCliJs}" "$@"`,
+          "fi",
+          "echo 'Claude CLI is unavailable in shared snapshot' >&2",
+          "exit 1",
+          "EOF",
+          "chmod +x /home/vercel-sandbox/.local/bin/claude",
+          "/home/vercel-sandbox/.local/bin/claude --version >/dev/null 2>&1"
         ].join(" && ")
       ],
       { env: sharedHomeEnv }
