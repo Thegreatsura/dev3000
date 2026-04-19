@@ -2088,7 +2088,8 @@ async function createAndSaveBaseSnapshot(
       [
         "-lc",
         [
-          `cat > /home/vercel-sandbox/.local/bin/claude <<'EOF'`,
+          "set -e",
+          "cat > /home/vercel-sandbox/.local/bin/claude <<'EOF'",
           "#!/bin/sh",
           `if [ -x "${localClaudeExecutable}" ]; then`,
           `  exec "${localClaudeExecutable}" "$@"`,
@@ -2104,7 +2105,7 @@ async function createAndSaveBaseSnapshot(
           "EOF",
           "chmod +x /home/vercel-sandbox/.local/bin/claude",
           "/home/vercel-sandbox/.local/bin/claude --version >/dev/null 2>&1"
-        ].join(" && ")
+        ].join("\n")
       ],
       { env: sharedHomeEnv }
     )
