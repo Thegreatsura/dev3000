@@ -255,7 +255,6 @@ import { homedir } from "os"
 import { detect } from "package-manager-detector"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
-import { cloudCheckPR } from "./commands/cloud-check-pr.js"
 import { cloudFix } from "./commands/cloud-fix.js"
 import { createPersistentLogFile, findAvailablePort, startDevEnvironment } from "./dev-environment.js"
 import { getBundledSkillsPath, getSkill, getSkillsInfo, listAvailableSkills } from "./skills/index.js"
@@ -1374,22 +1373,6 @@ cloud
       await cloudFix(options)
     } catch (error) {
       console.error(chalk.red("❌ Cloud fix failed:"), error)
-      process.exit(1)
-    }
-  })
-
-// Cloud check-pr command
-cloud
-  .command("check-pr [pr-number]")
-  .description("Verify a PR's changes work as expected using Vercel preview deployment")
-  .option("--repo <url>", "Repository URL (optional, auto-detected from git)")
-  .option("--url <preview-url>", "Preview deployment URL (optional, auto-detected from Vercel)")
-  .option("--debug", "Enable debug logging")
-  .action(async (prNumber, options) => {
-    try {
-      await cloudCheckPR({ ...options, prNumber })
-    } catch (error) {
-      console.error(chalk.red("❌ Cloud check-pr failed:"), error)
       process.exit(1)
     }
   })
