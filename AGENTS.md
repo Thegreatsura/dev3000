@@ -43,8 +43,6 @@ This file is the source of truth for agent guidance in this repo. `CLAUDE.md` is
 
 - Use `agent-browser` by default.
 - Use `agent-browser` when you need to drive the exact headed browser session d3k is already monitoring via CDP.
-- Use `next-browser` only for Next.js-specific inspection such as `tree`, `errors`, `logs`, or `routes`.
-- Do not treat `next-browser` as a drop-in replacement for `agent-browser`.
 
 ## Development Rules
 

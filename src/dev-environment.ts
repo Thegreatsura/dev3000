@@ -161,7 +161,7 @@ interface DevEnvironmentOptions {
   startupTimeoutSeconds: number
   browserNavigationTimeoutSeconds: number
   profileDir: string
-  browserTool: "agent-browser" | "next-browser"
+  browserTool: "agent-browser"
   logFile: string
   debug?: boolean
   serversOnly?: boolean
@@ -697,7 +697,7 @@ export function writeSessionInfo(
   serverPid?: number,
   skillsInstalled?: string[],
   skillsAgentId?: string | null,
-  preferredBrowserTool?: "agent-browser" | "next-browser",
+  preferredBrowserTool?: "agent-browser",
   agentName?: string | null
 ): void {
   const projectDir = getProjectDir()

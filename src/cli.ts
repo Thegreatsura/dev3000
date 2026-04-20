@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-type LocalBrowserTool = "agent-browser" | "next-browser"
+type LocalBrowserTool = "agent-browser"
 
 function getRunnablePath(searchPath: string): string | null {
   if (!existsSync(searchPath)) {
@@ -81,122 +81,34 @@ function findAgentBrowser(): string {
   return "agent-browser"
 }
 
-function findNextBrowserCli(): string | null {
-  if (process.env.NEXT_BROWSER_PATH) {
-    const runnablePath = getRunnablePath(process.env.NEXT_BROWSER_PATH)
-    if (runnablePath) {
-      return runnablePath
-    }
-  }
-
-  const cwd = process.cwd()
-  const home = homedir()
-  const searchPaths = [
-    join(
-      home,
-      ".bun",
-      "install",
-      "global",
-      "node_modules",
-      "dev3000",
-      "node_modules",
-      "@vercel",
-      "next-browser",
-      "dist",
-      "cli.js"
-    ),
-    join(home, ".bun", "install", "global", "node_modules", "@vercel", "next-browser", "dist", "cli.js"),
-    join(cwd, "node_modules", "@vercel", "next-browser", "dist", "cli.js"),
-    join(cwd, "..", "node_modules", "@vercel", "next-browser", "dist", "cli.js")
-  ]
-
-  const globalNodeModules = [
-    join("/usr", "local", "lib", "node_modules"),
-    join("/opt", "homebrew", "lib", "node_modules")
-  ]
-  for (const root of globalNodeModules) {
-    searchPaths.push(join(root, "dev3000", "node_modules", "@vercel", "next-browser", "dist", "cli.js"))
-    searchPaths.push(join(root, "@vercel", "next-browser", "dist", "cli.js"))
-  }
-
-  for (const searchPath of searchPaths) {
-    if (existsSync(searchPath)) {
-      return searchPath
-    }
-  }
-
-  return null
-}
-
-function runLocalBrowserTool(browserTool: LocalBrowserTool, args: string[]) {
+function runLocalBrowserTool(args: string[]) {
   const env = { ...process.env }
   ensureCommandPath(env)
 
-  if (browserTool === "agent-browser") {
-    const subcommandIndex = args.findIndex(
-      (arg: string) => !arg.startsWith("-") && !arg.startsWith("@") && arg !== "9222"
-    )
-    const subcommand = subcommandIndex >= 0 ? args[subcommandIndex] : null
+  const subcommandIndex = args.findIndex(
+    (arg: string) => !arg.startsWith("-") && !arg.startsWith("@") && arg !== "9222"
+  )
+  const subcommand = subcommandIndex >= 0 ? args[subcommandIndex] : null
 
-    if (subcommand === "errors") {
-      console.log("\x1b[33m💡 Tip: Using `d3k errors` instead (shows browser + server errors)\x1b[0m\n")
-      const d3kBin = process.argv[1]
-      const result = spawnSync(d3kBin, ["errors"], { stdio: "inherit", shell: false })
-      process.exit(result.status ?? 0)
-    }
-
-    if (subcommand === "console") {
-      console.log("\x1b[33m💡 Tip: Using `d3k logs` instead (shows browser + server logs)\x1b[0m\n")
-      const d3kBin = process.argv[1]
-      const result = spawnSync(d3kBin, ["logs", "--type", "browser"], { stdio: "inherit", shell: false })
-      process.exit(result.status ?? 0)
-    }
-
-    const binaryPath = findAgentBrowser()
-    const result = spawnSync(binaryPath, args, {
-      stdio: "pipe",
-      shell: false,
-      env
-    })
-
-    if (result.stdout?.length > 0) {
-      process.stdout.write(result.stdout)
-    }
-    if (result.stderr?.length > 0) {
-      process.stderr.write(result.stderr)
-    }
-    if (result.error) {
-      console.error(`\nError spawning agent-browser: ${result.error.message}`)
-      console.error(`Binary path: ${binaryPath}`)
-      process.exit(1)
-    }
-
-    process.exit(result.status ?? 1)
+  if (subcommand === "errors") {
+    console.log("\x1b[33m💡 Tip: Using `d3k errors` instead (shows browser + server errors)\x1b[0m\n")
+    const d3kBin = process.argv[1]
+    const result = spawnSync(d3kBin, ["errors"], { stdio: "inherit", shell: false })
+    process.exit(result.status ?? 0)
   }
 
-  const nodeVersionCheck = spawnSync("node", ["-e", "process.stdout.write(process.versions.node)"], {
-    encoding: "utf-8",
+  if (subcommand === "console") {
+    console.log("\x1b[33m💡 Tip: Using `d3k logs` instead (shows browser + server logs)\x1b[0m\n")
+    const d3kBin = process.argv[1]
+    const result = spawnSync(d3kBin, ["logs", "--type", "browser"], { stdio: "inherit", shell: false })
+    process.exit(result.status ?? 0)
+  }
+
+  const binaryPath = findAgentBrowser()
+  const result = spawnSync(binaryPath, args, {
+    stdio: "pipe",
     env,
     shell: false
-  })
-  const nodeVersion = nodeVersionCheck.stdout?.trim()
-  const nodeMajor = nodeVersion ? Number.parseInt(nodeVersion.split(".")[0] || "0", 10) : 0
-  if (nodeVersionCheck.status !== 0 || Number.isNaN(nodeMajor) || nodeMajor < 20) {
-    console.error("\nnext-browser requires a system Node.js runtime >= 20.")
-    console.error("Install Node 20+ or keep using agent-browser for local d3k sessions.")
-    process.exit(1)
-  }
-
-  const cliPath = findNextBrowserCli()
-  const nextBrowserHome = join(getProjectDir(), "next-browser-home")
-  mkdirSync(nextBrowserHome, { recursive: true })
-  env.HOME = nextBrowserHome
-  env.USERPROFILE = nextBrowserHome
-
-  const result = spawnSync(cliPath ? "node" : "next-browser", cliPath ? [cliPath, ...args] : args, {
-    stdio: "pipe",
-    shell: false,
-    env
   })
 
   if (result.stdout?.length > 0) {
@@ -206,10 +118,8 @@ function runLocalBrowserTool(browserTool: LocalBrowserTool, args: string[]) {
     process.stderr.write(result.stderr)
   }
   if (result.error) {
-    console.error(`\nError spawning next-browser: ${result.error.message}`)
-    if (cliPath) {
-      console.error(`CLI path: ${cliPath}`)
-    }
+    console.error(`\nError spawning agent-browser: ${result.error.message}`)
+    console.error(`Binary path: ${binaryPath}`)
     process.exit(1)
   }
 
@@ -221,10 +131,7 @@ import { getBrowserCommandInvocation } from "./utils/browser-command-argv.js"
 const browserCommandInvocation = getBrowserCommandInvocation(process.argv.slice(2))
 
 if (browserCommandInvocation && (process.argv[1]?.includes("d3k") || process.argv[1]?.includes("dev3000"))) {
-  const { browserCommand, args } = browserCommandInvocation
-  const browserTool: LocalBrowserTool = browserCommand === "next-browser" ? "next-browser" : "agent-browser"
-
-  runLocalBrowserTool(browserTool, args)
+  runLocalBrowserTool(browserCommandInvocation.args)
 }
 
 import chalk from "chalk"
@@ -915,11 +822,7 @@ program
     "60"
   )
   .option("--profile-dir <dir>", "Chrome profile directory")
-  .option(
-    "--browser-tool <tool>",
-    "Preferred local browser CLI: 'agent-browser' (default) or 'next-browser'",
-    "agent-browser"
-  )
+  .option("--browser-tool <tool>", "Preferred local browser CLI: 'agent-browser'", "agent-browser")
   .option(
     "--browser <path>",
     "Full path to browser executable (e.g. for Arc: '/Applications/Arc.app/Contents/MacOS/Arc')"
@@ -1204,7 +1107,7 @@ program
     const userSetPort = options.port !== undefined
     const startupTimeoutSeconds = Number.parseInt(options.startupTimeout, 10)
     const browserNavigationTimeoutSeconds = Number.parseInt(options.browserNavigationTimeout, 10)
-    const browserTool: LocalBrowserTool = options.browserTool === "next-browser" ? "next-browser" : "agent-browser"
+    const browserTool: LocalBrowserTool = "agent-browser"
     if (Number.isNaN(startupTimeoutSeconds) || startupTimeoutSeconds <= 0) {
       console.error(chalk.red("\n❌ --startup-timeout must be a positive integer (seconds).\n"))
       process.exit(1)
@@ -1387,11 +1290,6 @@ program
 program
   .command("agent-browser [args...]")
   .description("Run the bundled agent-browser CLI (e.g., d3k agent-browser screenshot /tmp/foo.png)")
-  .allowUnknownOption(true)
-
-program
-  .command("next-browser [args...]")
-  .description("Run the bundled next-browser CLI (e.g., d3k next-browser open http://localhost:3000)")
   .allowUnknownOption(true)
 
 // Skill command - get skill content for use in prompts/workflows

@@ -9,11 +9,11 @@ describe("getBrowserCommandInvocation", () => {
     })
   })
 
-  it("detects next-browser subcommands after root boolean flags", () => {
+  it("detects agent-browser subcommands after root boolean flags", () => {
     expect(
-      getBrowserCommandInvocation(["--debug", "--headless", "next-browser", "open", "http://localhost:3000"])
+      getBrowserCommandInvocation(["--debug", "--headless", "agent-browser", "open", "http://localhost:3000"])
     ).toEqual({
-      browserCommand: "next-browser",
+      browserCommand: "agent-browser",
       args: ["open", "http://localhost:3000"]
     })
   })
