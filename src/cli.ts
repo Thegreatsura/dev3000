@@ -1527,15 +1527,6 @@ program
     await crawlApp(options)
   })
 
-// Find-component command - map DOM to React source
-program
-  .command("find-component <selector>")
-  .description("Find React component source for a DOM selector")
-  .action(async (selector) => {
-    const { findComponent } = await import("./commands/find-component.js")
-    await findComponent(selector)
-  })
-
 program
   .command("resume")
   .description("Resume the last supported AI agent session for this project")

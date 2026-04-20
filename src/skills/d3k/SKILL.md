@@ -27,8 +27,6 @@ d3k fix --focus build   # Focus on build errors
 
 d3k crawl               # Discover app URLs
 d3k crawl --depth all   # Exhaustive crawl
-
-d3k find-component "nav"  # Find React component source
 ```
 
 ## Browser Interaction

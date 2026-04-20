@@ -62,9 +62,6 @@ d3k fix --time 30      # Analyze last 30 minutes (default: 10)
 d3k crawl              # Discover URLs by crawling the app
 d3k crawl --depth all  # Exhaustive crawl (default: 1 level)
 
-d3k find-component "nav.header"  # Find React component source
-d3k find-component "[data-testid='button']"
-
 d3k restart            # Restart the development server (rarely needed)
 ```
 

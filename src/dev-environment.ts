@@ -1396,7 +1396,7 @@ export class DevEnvironment {
       console.log(chalk.cyan(`Logs: ${this.options.logFile}`))
       console.log(chalk.cyan("☝️ Give this to an AI to auto debug and fix your app\n"))
       console.log(chalk.cyan(`🌐 Your App: ${this.preferredAppUrl}`))
-      console.log(chalk.cyan(`🔧 CLI Tools: d3k fix, d3k crawl, d3k find-component`))
+      console.log(chalk.cyan(`🔧 CLI Tools: d3k fix, d3k crawl`))
       if (this.options.serversOnly) {
         console.log(chalk.cyan("🖥️  Servers-only mode - browser monitoring disabled"))
       }
