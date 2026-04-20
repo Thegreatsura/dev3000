@@ -128,21 +128,6 @@ function findNextBrowserCli(): string | null {
   return null
 }
 
-function getProjectBrowserToolPreference(): LocalBrowserTool {
-  try {
-    const sessionFile = join(getProjectDir(), "session.json")
-    if (!existsSync(sessionFile)) {
-      return "agent-browser"
-    }
-    const sessionInfo = JSON.parse(readFileSync(sessionFile, "utf8")) as {
-      preferredBrowserTool?: LocalBrowserTool
-    }
-    return sessionInfo.preferredBrowserTool === "next-browser" ? "next-browser" : "agent-browser"
-  } catch {
-    return "agent-browser"
-  }
-}
-
 function runLocalBrowserTool(browserTool: LocalBrowserTool, args: string[]) {
   const env = { ...process.env }
   ensureCommandPath(env)
@@ -237,12 +222,7 @@ const browserCommandInvocation = getBrowserCommandInvocation(process.argv.slice(
 
 if (browserCommandInvocation && (process.argv[1]?.includes("d3k") || process.argv[1]?.includes("dev3000"))) {
   const { browserCommand, args } = browserCommandInvocation
-  const browserTool =
-    browserCommand === "browser"
-      ? getProjectBrowserToolPreference()
-      : browserCommand === "next-browser"
-        ? "next-browser"
-        : "agent-browser"
+  const browserTool: LocalBrowserTool = browserCommand === "next-browser" ? "next-browser" : "agent-browser"
 
   runLocalBrowserTool(browserTool, args)
 }
@@ -1412,11 +1392,6 @@ program
 program
   .command("next-browser [args...]")
   .description("Run the bundled next-browser CLI (e.g., d3k next-browser open http://localhost:3000)")
-  .allowUnknownOption(true)
-
-program
-  .command("browser [args...]")
-  .description("Run the preferred local browser CLI for this session")
   .allowUnknownOption(true)
 
 // Skill command - get skill content for use in prompts/workflows
