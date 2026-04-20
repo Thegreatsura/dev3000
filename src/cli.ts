@@ -255,7 +255,6 @@ import { homedir } from "os"
 import { detect } from "package-manager-detector"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
-import { cloudFix } from "./commands/cloud-fix.js"
 import { createPersistentLogFile, findAvailablePort, startDevEnvironment } from "./dev-environment.js"
 import { getBundledSkillsPath, getSkill, getSkillsInfo, listAvailableSkills } from "./skills/index.js"
 import { detectAIAgent } from "./utils/agent-detection.js"
@@ -1353,26 +1352,6 @@ program
       })
     } catch (error) {
       console.error(chalk.red("❌ Failed to start development environment:"), error)
-      process.exit(1)
-    }
-  })
-
-// Cloud commands
-const cloud = program.command("cloud").description("Cloud-based tools using Vercel Sandbox")
-
-// Cloud fix command
-cloud
-  .command("fix")
-  .description("Start a cloud fix workflow for the current project")
-  .option("--repo <url>", "Repository URL (e.g. https://github.com/user/repo)")
-  .option("--branch <name>", "Git branch to test")
-  .option("--project-dir <dir>", "Project directory within repo (e.g. 'www')")
-  .option("--debug", "Enable debug logging")
-  .action(async (options) => {
-    try {
-      await cloudFix(options)
-    } catch (error) {
-      console.error(chalk.red("❌ Cloud fix failed:"), error)
       process.exit(1)
     }
   })

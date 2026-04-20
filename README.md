@@ -74,7 +74,6 @@ d3k restart            # Restart the development server (rarely needed)
 d3k skill [name]       # Get skill content or list available skills
 d3k upgrade            # Upgrade d3k to the latest version
 d3k agent-browser      # Run the bundled agent-browser CLI
-d3k cloud              # Cloud-based tools using Vercel Sandbox
 ```
 
 ## Options
