@@ -50,8 +50,8 @@ This file is the source of truth for agent guidance in this repo. `CLAUDE.md` is
 
 - Package manager: `bun` only.
 - Never disable Turbopack in favor of webpack.
-- Do not run `./scripts/publish.sh`.
-- When the user asks to release, you may run `./scripts/release.sh`, then tell the user to run `./scripts/publish.sh`.
+- When the user asks to release, you may run `./scripts/release.sh`.
+- `./scripts/release.sh` prepares and pushes the stable release commit/tag; the GitHub release workflow publishes to npm via Trusted Publishing and then bumps `main` back to the next canary version.
 
 ## Validation
 
