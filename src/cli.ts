@@ -250,29 +250,69 @@ interface ForwardedOptions {
   agentName?: string
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function validatePortOption(port: string): string {
+  if (!/^\d+$/.test(port)) {
+    throw new Error("--port must be a numeric port number.")
+  }
+  const parsed = Number.parseInt(port, 10)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error("--port must be between 1 and 65535.")
+  }
+  return String(parsed)
+}
+
+function validatePositiveIntegerOption(name: string, value: string): string {
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`${name} must be a positive integer.`)
+  }
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer.`)
+  }
+  return String(parsed)
+}
+
+function validateScriptOption(script: string): string {
+  if (!/^[A-Za-z0-9._:/-]+$/.test(script)) {
+    throw new Error("--script may only contain letters, numbers, dots, slashes, colons, underscores, and hyphens.")
+  }
+  return script
+}
+
+function validateDateTimeOption(value: string): "local" | "utc" {
+  if (value !== "local" && value !== "utc") {
+    throw new Error("--date-time must be either 'local' or 'utc'.")
+  }
+  return value
+}
+
 /**
  * Build the d3k command string with forwarded options.
  */
 function buildD3kCommandWithOptions(options: ForwardedOptions): string {
   const d3kBase = process.argv[1].endsWith("d3k") ? "d3k" : "dev3000"
-  const args: string[] = [d3kBase]
+  const args: string[] = [shellQuote(d3kBase)]
 
   // Forward options that were explicitly set
-  if (options.port) args.push(`--port ${options.port}`)
-  if (options.script) args.push(`--script ${options.script}`)
-  if (options.command) args.push(`--command "${options.command.replace(/"/g, '\\"')}"`)
-  if (options.startupTimeout) args.push(`--startup-timeout ${options.startupTimeout}`)
+  if (options.port) args.push("--port", shellQuote(options.port))
+  if (options.script) args.push("--script", shellQuote(options.script))
+  if (options.command) args.push("--command", shellQuote(options.command))
+  if (options.startupTimeout) args.push("--startup-timeout", shellQuote(options.startupTimeout))
   if (options.browserNavigationTimeout) {
-    args.push(`--browser-navigation-timeout ${options.browserNavigationTimeout}`)
+    args.push("--browser-navigation-timeout", shellQuote(options.browserNavigationTimeout))
   }
-  if (options.profileDir) args.push(`--profile-dir "${options.profileDir}"`)
-  if (options.browserTool) args.push(`--browser-tool ${options.browserTool}`)
-  if (options.browser) args.push(`--browser "${options.browser}"`)
+  if (options.profileDir) args.push("--profile-dir", shellQuote(options.profileDir))
+  if (options.browserTool) args.push("--browser-tool", shellQuote(options.browserTool))
+  if (options.browser) args.push("--browser", shellQuote(options.browser))
   if (options.serversOnly) args.push("--servers-only")
   if (options.headless) args.push("--headless")
-  if (options.dateTime) args.push(`--date-time ${options.dateTime}`)
+  if (options.dateTime) args.push("--date-time", shellQuote(options.dateTime))
   if (options.pluginReactScan) args.push("--plugin-react-scan")
-  if (options.agentName) args.push(`--agent-name ${options.agentName}`)
+  if (options.agentName) args.push("--agent-name", shellQuote(options.agentName))
 
   return args.join(" ")
 }
@@ -854,6 +894,29 @@ program
     const projectName = getProjectDisplayName()
     setTerminalTitle(projectName)
 
+    try {
+      if (options.port) {
+        options.port = validatePortOption(options.port)
+      }
+      if (options.script) {
+        options.script = validateScriptOption(options.script)
+      }
+      options.startupTimeout = validatePositiveIntegerOption("--startup-timeout", options.startupTimeout)
+      options.browserNavigationTimeout = validatePositiveIntegerOption(
+        "--browser-navigation-timeout",
+        options.browserNavigationTimeout
+      )
+      if (options.browserTool && options.browserTool !== "agent-browser") {
+        throw new Error("--browser-tool must be 'agent-browser'.")
+      }
+      options.browserTool = "agent-browser"
+      options.dateTime = validateDateTimeOption(options.dateTime || "local")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(chalk.red(`\n❌ ${message}\n`))
+      process.exit(1)
+    }
+
     // Load user config early so it can be used for --with-agent and agent selection flows
     const userConfig = loadUserConfig()
     const agentDetection = detectAIAgent()
@@ -1066,6 +1129,7 @@ program
           script: options.script,
           command: options.command,
           startupTimeout: options.startupTimeout,
+          browserNavigationTimeout: options.browserNavigationTimeout,
           profileDir: options.profileDir,
           browserTool: options.browserTool,
           browser: browserOption,
