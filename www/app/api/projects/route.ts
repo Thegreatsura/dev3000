@@ -1,4 +1,4 @@
-import { cookies } from "next/headers"
+import { getVercelApiAccessToken } from "@/lib/auth"
 
 interface VercelProjectsResponse {
   projects?: Array<{
@@ -83,8 +83,7 @@ async function fetchAllProjects(accessToken: string, options: { teamId?: string 
  */
 export async function GET(request: Request) {
   try {
-    const cookieStore = await cookies()
-    const accessToken = cookieStore.get("access_token")?.value
+    const accessToken = await getVercelApiAccessToken()
 
     if (!accessToken) {
       return Response.json({ error: "Not authenticated" }, { status: 401 })

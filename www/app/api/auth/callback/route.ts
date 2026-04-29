@@ -1,5 +1,4 @@
-import { cookies } from "next/headers"
-import type { NextRequest } from "next/server"
+import { type NextRequest, NextResponse } from "next/server"
 import { sanitizeAuthRedirectPath } from "@/lib/auth-redirect"
 
 interface TokenData {
@@ -49,20 +48,14 @@ export async function GET(request: NextRequest) {
       throw new Error("Nonce mismatch")
     }
 
-    await setAuthCookies(tokenData)
+    const response = NextResponse.redirect(new URL(returnTo, request.url))
+    setAuthCookies(response, tokenData)
+    clearOAuthCookies(response)
 
-    const cookieStore = await cookies()
-
-    // Clear the state, nonce, and oauth_code_verifier cookies
-    cookieStore.set("oauth_state", "", { maxAge: 0 })
-    cookieStore.set("oauth_nonce", "", { maxAge: 0 })
-    cookieStore.set("oauth_code_verifier", "", { maxAge: 0 })
-    cookieStore.set("oauth_return_to", "", { maxAge: 0 })
-
-    return Response.redirect(new URL(returnTo, request.url))
+    return response
   } catch (error) {
     console.error("OAuth callback error:", error)
-    return Response.redirect(new URL("/auth/error", request.url))
+    return NextResponse.redirect(new URL("/auth/error", request.url))
   }
 }
 
@@ -112,20 +105,31 @@ async function exchangeCodeForToken(
   return tokenData
 }
 
-async function setAuthCookies(tokenData: TokenData) {
-  const cookieStore = await cookies()
+function setAuthCookies(response: NextResponse, tokenData: TokenData) {
+  const secure = process.env.NODE_ENV === "production"
 
-  cookieStore.set("access_token", tokenData.access_token, {
+  response.cookies.set("access_token", tokenData.access_token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure,
     sameSite: "lax",
+    path: "/",
     maxAge: tokenData.expires_in
   })
 
-  cookieStore.set("refresh_token", tokenData.refresh_token, {
+  response.cookies.set("refresh_token", tokenData.refresh_token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure,
     sameSite: "lax",
+    path: "/",
     maxAge: 60 * 60 * 24 * 30 // 30 days
   })
+}
+
+function clearOAuthCookies(response: NextResponse) {
+  for (const cookieName of ["oauth_state", "oauth_nonce", "oauth_code_verifier", "oauth_return_to"]) {
+    response.cookies.set(cookieName, "", {
+      path: "/",
+      maxAge: 0
+    })
+  }
 }

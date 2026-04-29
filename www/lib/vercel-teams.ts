@@ -1,5 +1,5 @@
 import { cookies } from "next/headers"
-import { getValidAccessToken } from "@/lib/auth"
+import { getVercelApiAccessToken } from "@/lib/auth"
 import { LAST_SELECTED_TEAM_COOKIE_NAME } from "@/lib/team-selection"
 
 export interface VercelTeam {
@@ -23,6 +23,26 @@ interface RawVercelTeam {
   billing?: {
     plan?: string
   }
+}
+
+interface RawVercelUser {
+  uid?: string
+  id?: string
+  username?: string
+  name?: string
+  email?: string
+  avatar?: string
+  avatarUrl?: string
+  image?: string
+  profileImage?: string
+  plan?: string
+  billing?: {
+    plan?: string
+  }
+}
+
+interface UserResponse {
+  user?: RawVercelUser
 }
 
 interface TeamsResponse {
@@ -88,7 +108,8 @@ async function fetchAllTeams(accessToken: string): Promise<RawVercelTeam[]> {
     const response = await fetch(apiUrl.toString(), {
       headers: {
         Authorization: `Bearer ${accessToken}`
-      }
+      },
+      cache: "no-store"
     })
 
     if (!response.ok) {
@@ -117,8 +138,31 @@ async function fetchAllTeams(accessToken: string): Promise<RawVercelTeam[]> {
   return teams
 }
 
+function normalizePersonalTeam(user: RawVercelUser | undefined): VercelTeam | null {
+  const id = user?.uid || user?.id || user?.username
+  const slug = user?.username
+
+  if (!id || !slug) {
+    return null
+  }
+
+  return {
+    id,
+    slug,
+    name: user.name || user.username || user.email || "Personal Account",
+    isPersonal: true,
+    avatarUrl: pickAvatarUrl({
+      avatar: user.avatar,
+      avatarUrl: user.avatarUrl,
+      image: user.image,
+      profileImage: user.profileImage
+    }),
+    planLabel: normalizePlanLabel(user.plan || user.billing?.plan, "Personal")
+  }
+}
+
 export async function listCurrentUserTeams(): Promise<VercelTeam[]> {
-  const accessToken = await getValidAccessToken()
+  const accessToken = await getVercelApiAccessToken()
   if (!accessToken) {
     return []
   }
@@ -129,14 +173,17 @@ export async function listCurrentUserTeams(): Promise<VercelTeam[]> {
     fetch("https://api.vercel.com/v2/user", {
       headers: {
         Authorization: `Bearer ${accessToken}`
-      }
+      },
+      cache: "no-store"
     }),
     fetchAllTeams(accessToken)
   ])
 
+  let personalTeam: VercelTeam | null = null
   if (userResult.status === "fulfilled") {
     if (userResult.value.ok) {
-      await userResult.value.json()
+      const userData = (await userResult.value.json()) as UserResponse
+      personalTeam = normalizePersonalTeam(userData.user)
     } else {
       const errorText = await userResult.value.text()
       console.error(`[Vercel Teams] Failed to fetch user: ${userResult.value.status} ${errorText}`)
@@ -154,9 +201,22 @@ export async function listCurrentUserTeams(): Promise<VercelTeam[]> {
         })()
 
   const teams: VercelTeam[] = []
+  if (personalTeam) {
+    teams.push(personalTeam)
+  }
 
   for (const team of fetchedTeams) {
     if (!team.id || !team.slug || !team.name) continue
+    if (
+      teams.some(
+        (existingTeam) =>
+          existingTeam.id.toLowerCase() === team.id?.toLowerCase() ||
+          existingTeam.slug.toLowerCase() === team.slug?.toLowerCase()
+      )
+    ) {
+      continue
+    }
+
     teams.push({
       id: team.id,
       slug: team.slug,

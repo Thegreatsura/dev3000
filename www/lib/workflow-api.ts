@@ -1,4 +1,4 @@
-import { getValidAccessToken } from "@/lib/auth"
+import { getVercelApiAccessToken } from "@/lib/auth"
 import { DEV3000_API_URL } from "@/lib/constants"
 
 function isLocalWorkflowHost(hostname: string): boolean {
@@ -27,7 +27,7 @@ async function fetchProxiedWorkflowRequest(request: Request): Promise<Response> 
   headers.delete("content-length")
 
   if (!headers.has("authorization")) {
-    const accessToken = await getValidAccessToken()
+    const accessToken = await getVercelApiAccessToken()
     if (accessToken) {
       headers.set("authorization", `Bearer ${accessToken}`)
     }

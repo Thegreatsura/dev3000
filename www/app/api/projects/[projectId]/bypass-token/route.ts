@@ -1,4 +1,4 @@
-import { cookies } from "next/headers"
+import { getVercelApiAccessToken } from "@/lib/auth"
 
 export async function POST(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
   try {
@@ -6,9 +6,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     const url = new URL(request.url)
     const teamId = url.searchParams.get("teamId")
 
-    // Get access token from cookies
-    const cookieStore = await cookies()
-    const accessToken = cookieStore.get("access_token")?.value
+    const accessToken = await getVercelApiAccessToken()
 
     if (!accessToken) {
       return Response.json({ error: "Unauthorized" }, { status: 401 })

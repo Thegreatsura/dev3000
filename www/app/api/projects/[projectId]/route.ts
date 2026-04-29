@@ -1,4 +1,4 @@
-import { cookies } from "next/headers"
+import { getVercelApiAccessToken } from "@/lib/auth"
 
 /**
  * API Route to fetch a single Vercel project by ID.
@@ -8,8 +8,7 @@ import { cookies } from "next/headers"
  */
 export async function GET(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
   try {
-    const cookieStore = await cookies()
-    const accessToken = cookieStore.get("access_token")?.value
+    const accessToken = await getVercelApiAccessToken()
 
     if (!accessToken) {
       return Response.json({ error: "Not authenticated" }, { status: 401 })

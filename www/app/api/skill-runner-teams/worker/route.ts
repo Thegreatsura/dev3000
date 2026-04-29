@@ -1,4 +1,4 @@
-import { getCurrentUser, getValidAccessToken } from "@/lib/auth"
+import { getCurrentUser, getVercelApiAccessToken } from "@/lib/auth"
 import { SKILL_RUNNER_WORKER_PROJECT_NAME } from "@/lib/skill-runner-config"
 import {
   findSkillRunnerWorkerProject,
@@ -161,7 +161,7 @@ export async function GET(request: Request) {
     return unauthorized()
   }
 
-  const accessToken = await getValidAccessToken()
+  const accessToken = await getVercelApiAccessToken()
   if (!accessToken) {
     return Response.json({ success: false, error: "Not authenticated" }, { status: 401 })
   }
@@ -189,7 +189,7 @@ export async function POST(request: Request) {
     return unauthorized()
   }
 
-  const accessToken = await getValidAccessToken()
+  const accessToken = await getVercelApiAccessToken()
   if (!accessToken) {
     return Response.json({ success: false, error: "Not authenticated" }, { status: 401 })
   }

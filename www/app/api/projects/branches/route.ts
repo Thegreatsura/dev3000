@@ -1,4 +1,4 @@
-import { getValidAccessToken } from "@/lib/auth"
+import { getVercelApiAccessToken } from "@/lib/auth"
 
 /**
  * API Route to fetch branches with recent deployments for a project
@@ -10,7 +10,7 @@ import { getValidAccessToken } from "@/lib/auth"
  */
 export async function GET(request: Request) {
   try {
-    const accessToken = await getValidAccessToken()
+    const accessToken = await getVercelApiAccessToken()
 
     if (!accessToken) {
       return Response.json({ error: "Not authenticated" }, { status: 401 })

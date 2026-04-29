@@ -1,3 +1,6 @@
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { cookies } from "next/headers"
 
 interface UserInfo {
@@ -5,6 +8,50 @@ interface UserInfo {
   email: string
   name: string
   username: string
+}
+
+interface VercelCliAuth {
+  token?: string
+  expiresAt?: number
+}
+
+function getLocalVercelCliAuthCandidates(): string[] {
+  const homeDirectory = os.homedir()
+  const xdgDataHome = process.env.XDG_DATA_HOME || path.join(homeDirectory, ".local", "share")
+  const candidates = [
+    path.join(xdgDataHome, "com.vercel.cli", "auth.json"),
+    path.join(homeDirectory, "Library", "Application Support", "com.vercel.cli", "auth.json"),
+    path.join(homeDirectory, ".now", "auth.json"),
+    path.join(homeDirectory, ".vercel", "auth.json")
+  ]
+
+  return Array.from(new Set(candidates))
+}
+
+function getLocalVercelCliAccessToken(): string | null {
+  if (process.env.NODE_ENV === "production" || process.env.DEV3000_DISABLE_VERCEL_CLI_AUTH === "1") {
+    return null
+  }
+
+  const explicitToken = process.env.VERCEL_TOKEN?.trim()
+  if (explicitToken) {
+    return explicitToken
+  }
+
+  for (const candidate of getLocalVercelCliAuthCandidates()) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8")) as VercelCliAuth
+      const token = parsed.token?.trim()
+      const expiresAt = typeof parsed.expiresAt === "number" ? parsed.expiresAt : null
+      if (token && (!expiresAt || expiresAt > Math.floor(Date.now() / 1000) + 60)) {
+        return token
+      }
+    } catch {
+      // Try the next known Vercel CLI auth location.
+    }
+  }
+
+  return null
 }
 
 async function fetchUserFromAccessToken(accessToken: string): Promise<UserInfo | null> {
@@ -91,6 +138,19 @@ export async function getValidAccessToken(): Promise<string | null> {
   // Return the access token if it exists
   // Token refresh is handled by middleware, not here
   return accessToken || null
+}
+
+/**
+ * Token for Vercel REST APIs. In local dev, prefer the Vercel CLI's API token
+ * when available because Sign in with Vercel only grants OIDC scopes.
+ */
+export async function getVercelApiAccessToken(): Promise<string | null> {
+  const accessToken = await getValidAccessToken()
+  if (!accessToken) {
+    return null
+  }
+
+  return getLocalVercelCliAccessToken() || accessToken
 }
 
 export async function getCurrentUserFromRequest(request: Request): Promise<UserInfo | null> {

@@ -1,7 +1,16 @@
 import { cookies } from "next/headers"
 import { NextResponse } from "next/server"
 
-async function revokeAndClearAuth(): Promise<number> {
+const AUTH_COOKIE_NAMES = [
+  "access_token",
+  "refresh_token",
+  "oauth_state",
+  "oauth_nonce",
+  "oauth_code_verifier",
+  "oauth_return_to"
+]
+
+async function revokeAuthToken(): Promise<number> {
   const cookieStore = await cookies()
   const accessToken = cookieStore.get("access_token")?.value
   let status = 200
@@ -33,23 +42,30 @@ async function revokeAndClearAuth(): Promise<number> {
     }
   }
 
-  cookieStore.set("access_token", "", { maxAge: 0 })
-  cookieStore.set("refresh_token", "", { maxAge: 0 })
-  cookieStore.set("oauth_state", "", { maxAge: 0 })
-  cookieStore.set("oauth_nonce", "", { maxAge: 0 })
-  cookieStore.set("oauth_code_verifier", "", { maxAge: 0 })
-  cookieStore.set("oauth_return_to", "", { maxAge: 0 })
-
   return status
 }
 
-export async function POST() {
-  const status = await revokeAndClearAuth()
+function clearAuthCookies(response: NextResponse) {
+  for (const cookieName of AUTH_COOKIE_NAMES) {
+    response.cookies.set(cookieName, "", {
+      path: "/",
+      maxAge: 0
+    })
+  }
+}
 
-  return Response.json({}, { status })
+export async function POST() {
+  const status = await revokeAuthToken()
+  const response = NextResponse.json({}, { status })
+  clearAuthCookies(response)
+
+  return response
 }
 
 export async function GET(request: Request) {
-  await revokeAndClearAuth()
-  return NextResponse.redirect(new URL("/signin", request.url))
+  await revokeAuthToken()
+  const response = NextResponse.redirect(new URL("/signin", request.url))
+  clearAuthCookies(response)
+
+  return response
 }

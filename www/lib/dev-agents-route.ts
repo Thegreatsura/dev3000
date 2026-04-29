@@ -17,12 +17,13 @@ export async function getDevAgentsRouteContext(teamParam: string): Promise<Route
   }
 
   const { teams, selectedTeam } = await resolveTeamFromParam(teamParam)
+  const defaultTeam = await getPreferredTeam(teams)
 
   return {
     user,
     teams,
     selectedTeam,
-    defaultTeam: teams[0] ?? null
+    defaultTeam
   }
 }
 
