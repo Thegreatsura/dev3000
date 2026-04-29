@@ -1,6 +1,14 @@
 import { existsSync, readdirSync, readFileSync } from "fs"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { findSkill, getSkill, getSkillDirectories, getSkillsInfo, listAvailableSkills, type SkillResult } from "./index"
+import {
+  findSkill,
+  getBundledD3kSkillPath,
+  getSkill,
+  getSkillDirectories,
+  getSkillsInfo,
+  listAvailableSkills,
+  type SkillResult
+} from "./index"
 
 vi.mock("fs", () => ({
   existsSync: vi.fn(),
@@ -28,6 +36,15 @@ describe("skills module", () => {
       mockExistsSync.mockReturnValue(true)
       const dirs = getSkillDirectories("/test/project")
       expect(dirs.some((d) => d.includes(".agents/skills"))).toBe(true)
+    })
+  })
+
+  describe("getBundledD3kSkillPath", () => {
+    it("should use the bundled internal skill filename", () => {
+      mockExistsSync.mockImplementation((path: string) => path.includes("d3k/internal-skill.md"))
+
+      const skillPath = getBundledD3kSkillPath()
+      expect(skillPath).toContain("d3k/internal-skill.md")
     })
   })
 
@@ -137,6 +154,16 @@ This is test content.`
 
       const skills = listAvailableSkills("/test/project")
       expect(skills).toEqual([])
+    })
+
+    it("should list bundled d3k from the internal skill filename", () => {
+      mockExistsSync.mockImplementation((path: string) => {
+        return (path.endsWith("/skills") && !path.includes(".agents/skills")) || path.includes("d3k/internal-skill.md")
+      })
+      mockReaddirSync.mockImplementation(() => [{ name: "d3k", isDirectory: () => true }])
+
+      const skills = listAvailableSkills("/test/project")
+      expect(skills).toEqual(["d3k"])
     })
   })
 

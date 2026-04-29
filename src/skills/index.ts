@@ -7,8 +7,11 @@
 
 import { existsSync, readdirSync, readFileSync } from "fs"
 import { homedir } from "os"
-import { dirname, join } from "path"
+import { dirname, join, resolve } from "path"
 import { fileURLToPath } from "url"
+
+const SKILL_FILENAME = "SKILL.md"
+const BUNDLED_D3K_SKILL_FILENAME = "internal-skill.md"
 
 export interface SkillInfo {
   name: string
@@ -23,6 +26,12 @@ export interface SkillResult {
   path?: string
   error?: string
   availableSkills?: string[]
+}
+
+function hasBundledD3kSkill(skillsDir: string): boolean {
+  return (
+    existsSync(join(skillsDir, "d3k", BUNDLED_D3K_SKILL_FILENAME)) || existsSync(join(skillsDir, "d3k", SKILL_FILENAME))
+  )
 }
 
 /**
@@ -57,9 +66,51 @@ export function getBundledSkillsPath(): string | null {
     const modulePath = fileURLToPath(moduleUrl)
     // This file is at dist/skills/index.js, so skills are at dist/skills/
     const skillsDir = dirname(modulePath)
-    if (existsSync(join(skillsDir, "d3k", "SKILL.md"))) {
+    if (hasBundledD3kSkill(skillsDir)) {
       return skillsDir
     }
+  }
+
+  return null
+}
+
+/**
+ * Get d3k's bundled internal skill file.
+ *
+ * The bundled package stores this as internal-skill.md so the repository has a
+ * single public SKILL.md at skills/d3k/SKILL.md. When d3k installs the skill
+ * into an agent skills directory, it still writes the target as SKILL.md.
+ */
+export function getBundledD3kSkillPath(): string | null {
+  const bundledSkillsDir = getBundledSkillsPath()
+  if (!bundledSkillsDir) return null
+
+  const internalSkillPath = join(bundledSkillsDir, "d3k", BUNDLED_D3K_SKILL_FILENAME)
+  if (existsSync(internalSkillPath)) {
+    return internalSkillPath
+  }
+
+  const legacySkillPath = join(bundledSkillsDir, "d3k", SKILL_FILENAME)
+  if (existsSync(legacySkillPath)) {
+    return legacySkillPath
+  }
+
+  return null
+}
+
+function isBundledSkillsDirectory(dir: string): boolean {
+  const bundledSkillsDir = getBundledSkillsPath()
+  return bundledSkillsDir !== null && resolve(dir) === resolve(bundledSkillsDir)
+}
+
+function getSkillPathInDirectory(dir: string, name: string): string | null {
+  const skillPath = join(dir, name, SKILL_FILENAME)
+  if (existsSync(skillPath)) {
+    return skillPath
+  }
+
+  if (name === "d3k" && isBundledSkillsDirectory(dir)) {
+    return getBundledD3kSkillPath()
   }
 
   return null
@@ -93,8 +144,8 @@ export function getSkillDirectories(cwd?: string): string[] {
  */
 export function findSkill(name: string, cwd?: string): string | null {
   for (const dir of getSkillDirectories(cwd)) {
-    const skillPath = join(dir, name, "SKILL.md")
-    if (existsSync(skillPath)) {
+    const skillPath = getSkillPathInDirectory(dir, name)
+    if (skillPath) {
       return skillPath
     }
   }
@@ -138,7 +189,7 @@ export function listAvailableSkills(cwd?: string): string[] {
   for (const dir of getSkillDirectories(cwd)) {
     try {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (entry.isDirectory() && existsSync(join(dir, entry.name, "SKILL.md"))) {
+        if (entry.isDirectory() && getSkillPathInDirectory(dir, entry.name)) {
           skills.add(entry.name)
         }
       }
@@ -160,8 +211,8 @@ export function getSkillsInfo(cwd?: string): SkillInfo[] {
     try {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (entry.isDirectory() && !skillsMap.has(entry.name)) {
-          const skillPath = join(dir, entry.name, "SKILL.md")
-          if (existsSync(skillPath)) {
+          const skillPath = getSkillPathInDirectory(dir, entry.name)
+          if (skillPath) {
             try {
               const content = readFileSync(skillPath, "utf-8")
               skillsMap.set(entry.name, {

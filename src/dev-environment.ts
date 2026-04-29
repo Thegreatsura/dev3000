@@ -22,7 +22,7 @@ import { CDPMonitor } from "./cdp-monitor.js"
 import { ensurePortlessAlias, getPortlessUrl, isPortlessInstalled, removePortlessAlias } from "./portless.js"
 import { ScreencastManager } from "./screencast-manager.js"
 import { type LogEntry, NextJsErrorDetector, OutputProcessor, StandardLogParser } from "./services/parsers/index.js"
-import { getBundledSkillsPath, listAvailableSkills } from "./skills/index.js"
+import { getBundledD3kSkillPath, listAvailableSkills } from "./skills/index.js"
 import { DevTUI } from "./tui-interface.js"
 import { readProjectAgentName, rememberProjectAgentName } from "./utils/project-metadata.js"
 import { getProjectDir, getProjectDisplayName, getProjectName } from "./utils/project-name.js"
@@ -653,11 +653,8 @@ export async function findAvailablePort(startPort: number): Promise<string> {
  */
 async function ensureD3kSkill(skillsAgentId?: string): Promise<void> {
   try {
-    const bundledSkillsDir = getBundledSkillsPath()
-    if (!bundledSkillsDir) return
-
-    const bundledSkillPath = join(bundledSkillsDir, "d3k", "SKILL.md")
-    if (!existsSync(bundledSkillPath)) return
+    const bundledSkillPath = getBundledD3kSkillPath()
+    if (!bundledSkillPath) return
 
     const targetSkillsDir = skillsAgentId ? getSkillsPathForLocation(skillsAgentId, "project")?.path : null
 

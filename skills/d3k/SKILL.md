@@ -36,6 +36,46 @@ d3k --no-agent --no-tui -t
 
 4. Keep d3k running while editing code. Do not start a second dev server with `npm/bun dev`.
 
+## Codex Fresh Browser/Profile Startup
+
+Use this workflow when the user asks Codex to start d3k with a fresh browser/profile.
+
+1. Close any stale `agent-browser` daemon before launching with `--profile`. Otherwise `agent-browser` will reuse the existing daemon and print `--profile ignored`.
+   ```bash
+   d3k agent-browser close --all
+   ```
+
+2. Start the app through d3k in `servers-only` mode and keep that command running. In Codex, this is more reliable than asking d3k to launch the browser itself when a fresh profile is required.
+   ```bash
+   d3k --no-agent --no-skills --servers-only --command "npm run dev -- -H 127.0.0.1 -p 3000" --port 3000 --startup-timeout 90 --no-tui
+   ```
+
+   Adjust the package-manager command and port for the project. Prefer `--command` over `--script` when passing framework flags. For npm scripts, put flags after `--`; otherwise tools like Next.js can interpret the port as a project directory.
+
+3. Verify the server before opening more browser windows:
+   ```bash
+   curl -I http://127.0.0.1:3000
+   ```
+
+4. Open the fresh profile as a separate browser step:
+   ```bash
+   d3k agent-browser --profile /tmp/d3k-fresh-profile --headed open http://127.0.0.1:3000
+   ```
+
+5. Sanity-check the opened page:
+   ```bash
+   d3k agent-browser get title
+   d3k agent-browser snapshot -i
+   d3k errors
+   ```
+
+Practical rules:
+
+- Prefer `127.0.0.1` for this workflow. If `localhost` hangs or flips between IPv4/IPv6 behavior, do not keep retrying browser launches.
+- If `curl -I` hangs, the server is wedged even if the port appears occupied; restart the d3k server process before opening a browser.
+- In `servers-only` mode there is no d3k-monitored CDP browser. Use regular `d3k agent-browser` commands, not `d3k cdp-port`.
+- In sandboxed agent environments, rerun local-network checks and `agent-browser` opens outside the sandbox when sandbox networking blocks access to `127.0.0.1`.
+
 ## Debugging Commands
 
 Use these first before ad-hoc log scraping:

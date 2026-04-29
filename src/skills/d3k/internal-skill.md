@@ -27,8 +27,6 @@ d3k fix --focus build   # Focus on build errors
 
 d3k crawl               # Discover app URLs
 d3k crawl --depth all   # Exhaustive crawl
-
-d3k find-component "nav"  # Find React component source
 ```
 
 ## Browser Interaction
@@ -44,44 +42,64 @@ d3k agent-browser --cdp 9222 fill @e3 "text"
 d3k agent-browser --cdp 9222 screenshot /tmp/shot.png
 ```
 
+## Codex Fresh Browser/Profile Startup
+
+Use this workflow when the user asks Codex to start d3k with a fresh browser/profile.
+
+1. Close any stale `agent-browser` daemon before launching with `--profile`. Otherwise `agent-browser` will reuse the existing daemon and print `--profile ignored`.
+   ```bash
+   d3k agent-browser close --all
+   ```
+
+2. Start the app through d3k in `servers-only` mode and keep that command running. In Codex, this is more reliable than asking d3k to launch the browser itself when a fresh profile is required.
+   ```bash
+   d3k --no-agent --no-skills --servers-only --command "npm run dev -- -H 127.0.0.1 -p 3000" --port 3000 --startup-timeout 90 --no-tui
+   ```
+
+   Adjust the package-manager command and port for the project. Prefer `--command` over `--script` when passing framework flags. For npm scripts, put flags after `--`; otherwise tools like Next.js can interpret the port as a project directory.
+
+3. Verify the server before opening more browser windows:
+   ```bash
+   curl -I http://127.0.0.1:3000
+   ```
+
+4. Open the fresh profile as a separate browser step:
+   ```bash
+   d3k agent-browser --profile /tmp/d3k-fresh-profile --headed open http://127.0.0.1:3000
+   ```
+
+5. Sanity-check the opened page:
+   ```bash
+   d3k agent-browser get title
+   d3k agent-browser snapshot -i
+   d3k errors
+   ```
+
+Practical rules:
+
+- Prefer `127.0.0.1` for this workflow. If `localhost` hangs or flips between IPv4/IPv6 behavior, do not keep retrying browser launches.
+- If `curl -I` hangs, the server is wedged even if the port appears occupied; restart the d3k server process before opening a browser.
+- In `servers-only` mode there is no d3k-monitored CDP browser. Use regular `d3k agent-browser` commands, not `d3k cdp-port`.
+- In sandboxed agent environments, rerun local-network checks and `agent-browser` opens outside the sandbox when sandbox networking blocks access to `127.0.0.1`.
+
 ## Browser Tool Choice
 
-Use the browser tool that matches the task:
-
-- `agent-browser`
-  - Default choice.
-  - Best for generic web apps and for driving the exact headed browser session d3k is already monitoring.
-  - Use it when you need `snapshot`, ref-based `click`, `fill`, or to reproduce what the user sees in the monitored tab.
-- `next-browser`
-  - Next.js-specific tool.
-  - Best for Next/React introspection: `tree`, `errors`, `logs`, `routes`, `project`, and related Next dev-server diagnostics.
-  - It is not a drop-in replacement for `agent-browser`: no accessibility `snapshot`, no ref-based `click`, and no `fill`.
-  - It runs its own daemon/browser flow and does not use `d3k cdp-port`.
+Use `agent-browser` for browser work.
 
 Practical rule:
 
 - Need to drive the same monitored browser session: use `agent-browser`.
-- Need Next.js component-tree or Next-specific diagnostics: use `next-browser`.
-
-Examples:
+- Examples:
 
 ```bash
-# Same monitored browser session
 d3k agent-browser --cdp 9222 snapshot -i
 d3k agent-browser --cdp 9222 click @e2
-
-# Next.js-specific inspection
-d3k next-browser open http://localhost:3000
-d3k next-browser tree
-d3k next-browser errors
-d3k next-browser logs
 ```
 
 To make d3k prefer one locally when it launches helper browser commands, use:
 
 ```bash
 d3k --browser-tool agent-browser
-d3k --browser-tool next-browser
 ```
 
 ## Fix Workflow

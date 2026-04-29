@@ -143,7 +143,7 @@ import { detect } from "package-manager-detector"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
 import { createPersistentLogFile, findAvailablePort, startDevEnvironment } from "./dev-environment.js"
-import { getBundledSkillsPath, getSkill, getSkillsInfo, listAvailableSkills } from "./skills/index.js"
+import { getBundledD3kSkillPath, getSkill, getSkillsInfo, listAvailableSkills } from "./skills/index.js"
 import { detectAIAgent } from "./utils/agent-detection.js"
 import { getAvailableAgents, getSkillsAgentId } from "./utils/agent-selection.js"
 import { ensureD3kHomeDir } from "./utils/d3k-dir.js"
@@ -319,11 +319,8 @@ function buildD3kCommandWithOptions(options: ForwardedOptions): string {
 
 function ensureClaudeD3kSkill(): void {
   try {
-    const bundledSkillsDir = getBundledSkillsPath()
-    if (!bundledSkillsDir) return
-
-    const bundledSkillPath = join(bundledSkillsDir, "d3k", "SKILL.md")
-    if (!existsSync(bundledSkillPath)) return
+    const bundledSkillPath = getBundledD3kSkillPath()
+    if (!bundledSkillPath) return
 
     const skillsRoot = join(process.cwd(), ".claude", "skills")
     const skillDir = join(skillsRoot, "d3k")
