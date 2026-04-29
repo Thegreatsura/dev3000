@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "fs"
-import { beforeEach, describe, expect, it, vi } from "vitest"
-import { getProjectDisplayName, getProjectName } from "./project-name"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { getProjectDir, getProjectDisplayName, getProjectName } from "./project-name"
 
 // Mock fs module
 vi.mock("fs", () => ({
@@ -118,5 +118,32 @@ describe("getProjectDisplayName", () => {
     expect(fullName).toMatch(/^my-project-[a-f0-9]{6}$/)
     // Display name should have hash removed
     expect(displayName).toBe("my-project")
+  })
+})
+
+describe("getProjectDir", () => {
+  const originalDataDir = process.env.D3K_DATA_DIR
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    if (originalDataDir === undefined) {
+      delete process.env.D3K_DATA_DIR
+    } else {
+      process.env.D3K_DATA_DIR = originalDataDir
+    }
+  })
+
+  afterEach(() => {
+    if (originalDataDir === undefined) {
+      delete process.env.D3K_DATA_DIR
+    } else {
+      process.env.D3K_DATA_DIR = originalDataDir
+    }
+  })
+
+  it("should use D3K_DATA_DIR when provided", () => {
+    process.env.D3K_DATA_DIR = "/tmp/custom-d3k-data"
+
+    expect(getProjectDir("/home/user/projects/app")).toBe("/tmp/custom-d3k-data")
   })
 })

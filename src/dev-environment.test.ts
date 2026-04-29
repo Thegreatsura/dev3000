@@ -27,6 +27,8 @@ const restoreHome = (tempHome: string) => {
 
 import {
   countActiveD3kInstances,
+  createPersistentLogFile,
+  DevEnvironment,
   findAvailablePort,
   getSessionChromePids,
   gracefulKillProcess,
@@ -786,6 +788,72 @@ describe("writeSessionInfo", () => {
 
     const sessionInfo = JSON.parse(readFileSync(sessionFile, "utf-8")) as { agentName?: string | null }
     expect(sessionInfo.agentName).toBe("codex-yolo")
+  })
+})
+
+describe("createPersistentLogFile", () => {
+  it("should create an explicit log-file path without truncating existing content", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "d3k-log-file-"))
+    try {
+      const logFile = join(tempDir, "nested", "session.log")
+      mkdirSync(join(tempDir, "nested"), { recursive: true })
+      writeFileSync(logFile, "existing log\n")
+
+      const result = createPersistentLogFile(logFile)
+
+      expect(result).toBe(logFile)
+      expect(readFileSync(logFile, "utf-8")).toBe("existing log\n")
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it("should create parent directories for an explicit log-file path", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "d3k-log-file-"))
+    try {
+      const logFile = join(tempDir, "nested", "session.log")
+
+      const result = createPersistentLogFile(logFile)
+
+      expect(result).toBe(logFile)
+      expect(readFileSync(logFile, "utf-8")).toBe("")
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("DevEnvironment log initialization", () => {
+  it("should not truncate an existing explicit log file", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "d3k-dev-env-log-"))
+    const originalDataDir = process.env.D3K_DATA_DIR
+    try {
+      process.env.D3K_DATA_DIR = join(tempDir, "data")
+      const logFile = join(tempDir, "session.log")
+      writeFileSync(logFile, "existing log\n")
+
+      new DevEnvironment({
+        port: "3000",
+        serverCommand: "echo ready",
+        startupTimeoutSeconds: 1,
+        browserNavigationTimeoutSeconds: 1,
+        profileDir: join(tempDir, "profile"),
+        browserTool: "agent-browser",
+        logFile,
+        commandName: "d3k",
+        tui: false,
+        serversOnly: true
+      })
+
+      expect(readFileSync(logFile, "utf-8")).toBe("existing log\n")
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.D3K_DATA_DIR
+      } else {
+        process.env.D3K_DATA_DIR = originalDataDir
+      }
+      rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })
 

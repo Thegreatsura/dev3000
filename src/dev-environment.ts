@@ -182,6 +182,7 @@ interface DevEnvironmentOptions {
   skillsAgentId?: string // Selected agent id for skills/d3k skill placement
   autoSkills?: boolean // Auto-install recommended skills (non-interactive)
   installSkills?: boolean // Disable skill installation/update checks when false
+  screenshotsDir?: string // Override directory where screenshots are written (--screenshots-dir)
 }
 
 class Logger {
@@ -198,8 +199,8 @@ class Logger {
     if (!existsSync(logDir)) {
       mkdirSync(logDir, { recursive: true })
     }
-    // Clear log file
-    writeFileSync(this.logFile, "")
+    // Touch the log file without truncating an explicit existing --log-file.
+    appendFileSync(this.logFile, "")
   }
 
   log(source: "server" | "browser", message: string) {
@@ -718,7 +719,23 @@ async function autoInstallSkills(agentId: SkillsAgentId | undefined, debugLog: (
 // REMOVED: cleanup functions are no longer needed
 // CLI integration config files are now kept persistent across dev3000 restarts
 
-export function createPersistentLogFile(): string {
+export function createPersistentLogFile(override?: string): string {
+  if (override && override.length > 0) {
+    const resolved = resolve(override)
+    const logDir = dirname(resolved)
+    try {
+      if (!existsSync(logDir)) {
+        mkdirSync(logDir, { recursive: true })
+      }
+      appendFileSync(resolved, "")
+      return resolved
+    } catch (error) {
+      throw new Error(
+        `Failed to initialize --log-file at ${resolved}: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  }
+
   // Get unique project name
   const projectName = getProjectName()
 
@@ -963,7 +980,7 @@ export class DevEnvironment {
 
     // Store screenshots in project-specific directory for local access
     const projectName = getProjectName()
-    this.screenshotDir = join(getProjectDir(), "screenshots")
+    this.screenshotDir = options.screenshotsDir ? resolve(options.screenshotsDir) : join(getProjectDir(), "screenshots")
     // Use project-specific PID and lock files to allow multiple projects to run simultaneously
     this.pidFile = join(tmpdir(), `dev3000-${projectName}.pid`)
     this.lockFile = join(tmpdir(), `dev3000-${projectName}.lock`)
