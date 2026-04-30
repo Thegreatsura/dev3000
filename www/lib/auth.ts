@@ -29,7 +29,7 @@ function getLocalVercelCliAuthCandidates(): string[] {
 }
 
 function getLocalVercelCliAccessToken(): string | null {
-  if (process.env.NODE_ENV === "production" || process.env.DEV3000_DISABLE_VERCEL_CLI_AUTH === "1") {
+  if (process.env.NODE_ENV === "production" || process.env.DEV3000_USE_VERCEL_CLI_AUTH !== "1") {
     return null
   }
 
@@ -141,8 +141,8 @@ export async function getValidAccessToken(): Promise<string | null> {
 }
 
 /**
- * Token for Vercel REST APIs. In local dev, prefer the Vercel CLI's API token
- * when available because Sign in with Vercel only grants OIDC scopes.
+ * Token for Vercel REST APIs. Use the Sign in with Vercel session token by
+ * default in every environment so localhost does not hide production auth gaps.
  */
 export async function getVercelApiAccessToken(): Promise<string | null> {
   const accessToken = await getValidAccessToken()
