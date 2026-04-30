@@ -1051,6 +1051,7 @@ async function createWorkerProject(accessToken: string, team: VercelTeam): Promi
       name: SKILL_RUNNER_WORKER_PROJECT_NAME,
       framework: "nextjs",
       rootDirectory: SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
+      skipGitConnectDuringLink: true,
       gitRepository: {
         type: "github",
         repo: SKILL_RUNNER_WORKER_REPO,
