@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 const MAX_DURATION_SECONDS = {
+  // Vercel accepts numeric function durations in generated workflow config.
   steps: 800,
   workflows: 60
 }
