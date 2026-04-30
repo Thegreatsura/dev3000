@@ -13,7 +13,7 @@ import type {
 } from "@/lib/dev-agents"
 
 const ASH_PACKAGE_NAME = "experimental-ash"
-const ASH_PACKAGE_VERSION = "0.3.0-alpha.5"
+const ASH_PACKAGE_VERSION = "0.3.0-alpha.28"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
 const ASH_ARTIFACT_FORMAT_VERSION = 4
 
@@ -636,6 +636,7 @@ export async function createDevAgentAshSource(input: DevAgentAshInput, revision:
             zod: "^4.3.6"
           },
           devDependencies: {
+            "@types/node": "^24.12.2",
             "@typescript/native-preview": "7.0.0-dev.20260320.1"
           }
         },
@@ -654,7 +655,8 @@ export async function createDevAgentAshSource(input: DevAgentAshInput, revision:
             strict: true,
             noEmit: true,
             esModuleInterop: true,
-            skipLibCheck: true
+            skipLibCheck: true,
+            types: ["node"]
           },
           include: ["agent/**/*.ts"]
         },

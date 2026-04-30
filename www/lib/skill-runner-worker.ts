@@ -76,6 +76,11 @@ interface VercelDeploymentDetailsResponse {
   }
 }
 
+interface VercelDeploymentCreateResponse {
+  id?: string
+  uid?: string
+}
+
 interface VercelApiErrorPayload {
   error?: {
     code?: string
@@ -261,16 +266,39 @@ function buildWorkerProjectCreateError(status: number, errorText: string): Error
   return new Error(`Failed to install runner project: ${status} ${errorText}`)
 }
 
-function buildMissingInitialDeploymentError(project: SkillRunnerWorkerProject): SkillRunnerWorkerSetupError {
-  return new SkillRunnerWorkerSetupError(
-    `The runner project was created, but Vercel never started its first deployment. This usually means the team's Git integration cannot access ${SKILL_RUNNER_WORKER_REPO}. Open the runner project, review its source-repo access, then retry setup.`,
-    {
-      code: "initial_deployment_missing",
-      actionLabel: "Open Runner Project",
-      actionUrl: project.dashboardUrl,
-      repo: SKILL_RUNNER_WORKER_REPO
-    }
-  )
+function buildInitialDeploymentCreateError(
+  status: number,
+  errorText: string,
+  project: SkillRunnerWorkerProject
+): Error {
+  const payload = parseVercelApiErrorPayload(errorText)
+  const vercelError = payload?.error
+  const message = vercelError?.message?.trim()
+  const action = vercelError?.action?.trim()
+  const actionUrl = vercelError?.link?.trim()
+  const repo = vercelError?.repo?.trim()
+  const errorCode = vercelError?.code?.trim()
+  const searchableText = [errorCode, message, action, errorText].filter(Boolean).join("\n")
+
+  if (
+    (status === 400 || status === 403 || status === 404) &&
+    /github|git|repository|repo|source|access|permission|not authorized|not found|integration/i.test(searchableText)
+  ) {
+    return new SkillRunnerWorkerSetupError(
+      message ||
+        `The runner project exists, but Vercel could not start a deployment from ${SKILL_RUNNER_WORKER_REPO}. Open the runner project, review its source-repo access, then retry setup.`,
+      {
+        code: /install github app|github integration/i.test(searchableText)
+          ? "github_integration_required"
+          : "initial_deployment_missing",
+        actionLabel: actionUrl ? "Open Vercel Setup" : "Open Runner Project",
+        actionUrl: actionUrl || project.dashboardUrl,
+        repo: repo || SKILL_RUNNER_WORKER_REPO
+      }
+    )
+  }
+
+  return new Error(`Failed to start runner project deployment: ${status} ${errorText}`)
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -711,6 +739,70 @@ async function redeployWorkerProject(
   return data.id?.trim() || null
 }
 
+function buildInitialDeploymentGitSource(branch: string): {
+  type: "github"
+  org: string
+  repo: string
+  ref: string
+} {
+  const [org, repo] = SKILL_RUNNER_WORKER_REPO.split("/")
+  if (!org || !repo) {
+    throw new Error(`Invalid runner repo: ${SKILL_RUNNER_WORKER_REPO}`)
+  }
+
+  return {
+    type: "github",
+    org,
+    repo,
+    ref: branch
+  }
+}
+
+async function createInitialWorkerDeployment(
+  accessToken: string,
+  team: VercelTeam,
+  project: SkillRunnerWorkerProject
+): Promise<string> {
+  const apiUrl = new URL("https://api.vercel.com/v13/deployments")
+  apiUrl.searchParams.set("teamId", team.id)
+  apiUrl.searchParams.set("forceNew", "1")
+  apiUrl.searchParams.set("skipAutoDetectionConfirmation", "1")
+
+  const response = await fetch(apiUrl.toString(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name: project.projectName,
+      project: project.projectId,
+      target: "production",
+      gitSource: buildInitialDeploymentGitSource(project.desiredWorkerBranch || resolveWorkerGitBranch()),
+      projectSettings: {
+        framework: "nextjs",
+        rootDirectory: SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
+        nodeVersion: "24.x",
+        sourceFilesOutsideRootDirectory: true
+      }
+    }),
+    cache: "no-store"
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw buildInitialDeploymentCreateError(response.status, errorText, project)
+  }
+
+  const data = (await response.json()) as VercelDeploymentCreateResponse
+  const deploymentId = data.id?.trim() || data.uid?.trim()
+  if (!deploymentId) {
+    throw new Error("Runner project deployment was started but the response was incomplete.")
+  }
+
+  return deploymentId
+}
+
 async function upsertWorkerProjectEnv(
   accessToken: string,
   team: VercelTeam,
@@ -891,6 +983,7 @@ export async function installSkillRunnerWorkerProject(
   await ensureWorkerBlobStore(accessToken, team, project)
 
   let deploymentId = project.latestDeploymentId || null
+  let createdInitialDeployment = false
   if (!deploymentId) {
     for (let attempt = 0; attempt < INITIAL_DEPLOYMENT_POLL_ATTEMPTS; attempt += 1) {
       const resolved = await findSkillRunnerWorkerProject(accessToken, team)
@@ -903,14 +996,17 @@ export async function installSkillRunnerWorkerProject(
   }
 
   if (!deploymentId) {
-    throw buildMissingInitialDeploymentError(project)
+    deploymentId = await createInitialWorkerDeployment(accessToken, team, project)
+    createdInitialDeployment = true
   }
 
   const redeployProject = {
     ...project,
     latestDeploymentId: deploymentId
   }
-  const redeployedId = await redeployWorkerProject(accessToken, team, redeployProject)
+  const redeployedId = createdInitialDeployment
+    ? deploymentId
+    : await redeployWorkerProject(accessToken, team, redeployProject)
 
   if (redeployedId) {
     for (let attempt = 0; attempt < 30; attempt += 1) {
