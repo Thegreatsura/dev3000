@@ -65,7 +65,7 @@ async function attemptRefresh(refreshToken: string): Promise<RefreshTokenRespons
       refresh_token: refreshToken
     })
 
-    const response = await fetch("https://vercel.com/api/login/oauth/token", {
+    const response = await fetch("https://api.vercel.com/login/oauth/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded"

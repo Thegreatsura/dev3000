@@ -19,7 +19,7 @@ async function revokeAuthToken(): Promise<number> {
     const credentials = `${process.env.NEXT_PUBLIC_CLIENT_ID}:${process.env.CLIENT_SECRET}`
 
     try {
-      const response = await fetch("https://vercel.com/api/login/oauth/token/revoke", {
+      const response = await fetch("https://api.vercel.com/login/oauth/token/revoke", {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
