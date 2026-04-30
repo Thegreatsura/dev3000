@@ -1,7 +1,10 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
-const WORKFLOW_MAX_DURATION_SECONDS = 800
+const MAX_DURATION_SECONDS = {
+  steps: 800,
+  workflows: 60
+}
 
 const configPaths = [
   join(process.cwd(), "app/.well-known/workflow/v1/config.json"),
@@ -18,20 +21,10 @@ async function patchConfig(configPath) {
   }
 
   let changed = false
-  for (const key of ["steps", "workflows"]) {
+  for (const key of Object.keys(MAX_DURATION_SECONDS)) {
     if (parsed?.[key]?.maxDuration === "max") {
-      parsed[key].maxDuration = WORKFLOW_MAX_DURATION_SECONDS
+      parsed[key].maxDuration = MAX_DURATION_SECONDS[key]
       changed = true
-    }
-
-    const triggers = parsed?.[key]?.experimentalTriggers
-    if (Array.isArray(triggers)) {
-      for (const trigger of triggers) {
-        if (trigger?.type === "queue/v2beta") {
-          trigger.type = "queue/v1beta"
-          changed = true
-        }
-      }
     }
   }
 
