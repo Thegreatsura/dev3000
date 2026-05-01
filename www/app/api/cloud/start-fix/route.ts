@@ -245,22 +245,6 @@ async function resolveSelfHostedWorkerOidcToken({
   if (!isSelfHostedWorker) return { source: "missing" }
 
   try {
-    const token = await refreshSelfHostedProjectOidcToken({
-      isSelfHostedWorker,
-      projectRefreshToken
-    })
-    if (token) {
-      console.log("[Start Fix] Resolved worker OIDC token", {
-        source: "worker-project-oidc-refresh",
-        claims: describeOidcClaimsForLog(token)
-      })
-      return { source: "worker-project-oidc-refresh", token }
-    }
-  } catch (error) {
-    console.warn("[Start Fix] Failed to refresh worker project OIDC token", describeErrorForLog(error))
-  }
-
-  try {
     const token = (await getVercelOidcToken()).trim()
     if (token) {
       console.log("[Start Fix] Resolved worker OIDC token", {
@@ -286,6 +270,22 @@ async function resolveSelfHostedWorkerOidcToken({
       claims: describeOidcClaimsForLog(runtimeOidcToken)
     })
     return { source: "worker-runtime-oidc", token: runtimeOidcToken }
+  }
+
+  try {
+    const token = await refreshSelfHostedProjectOidcToken({
+      isSelfHostedWorker,
+      projectRefreshToken
+    })
+    if (token) {
+      console.log("[Start Fix] Resolved worker OIDC token", {
+        source: "worker-project-oidc-refresh",
+        claims: describeOidcClaimsForLog(token)
+      })
+      return { source: "worker-project-oidc-refresh", token }
+    }
+  } catch (error) {
+    console.warn("[Start Fix] Failed to refresh worker project OIDC token", describeErrorForLog(error))
   }
 
   return { source: "missing" }

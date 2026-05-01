@@ -4913,12 +4913,14 @@ function buildEnsureBunAvailableScript(): string {
     'export HOME="/home/vercel-sandbox"',
     'export BUN_INSTALL="$HOME/.bun"',
     'export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:/vercel/runtimes/node22/bin:/vercel/runtimes/nodejs/bin:/usr/bin:/bin:$PATH"',
-    'BUN_BIN="$(command -v bun || true)"',
-    'if [ -z "$BUN_BIN" ] && [ -x "$BUN_INSTALL/bin/bun" ]; then BUN_BIN="$BUN_INSTALL/bin/bun"; fi',
-    'if [ -z "$BUN_BIN" ] && [ -x "/usr/local/bin/bun" ]; then BUN_BIN="/usr/local/bin/bun"; fi',
+    'BUN_BIN=""',
+    'for candidate in "$BUN_INSTALL/bin/bun" "/usr/local/bin/bun"; do if [ -x "$candidate" ]; then BUN_BIN="$candidate"; break; fi; done',
+    'if [ -z "$BUN_BIN" ]; then FOUND_BUN="$(PATH="/usr/local/bin:/usr/bin:/bin:$PATH" command -v bun || true)"; if [ -n "$FOUND_BUN" ] && [ "$FOUND_BUN" != "$HOME/.local/bin/bun" ]; then BUN_BIN="$FOUND_BUN"; fi; fi',
     'if [ -z "$BUN_BIN" ]; then curl -fsSL https://bun.sh/install | bash; BUN_BIN="$BUN_INSTALL/bin/bun"; fi',
     'if [ ! -x "$BUN_BIN" ]; then echo "Bun unavailable after install attempt" >&2; exit 1; fi',
+    'BUN_BIN="$(readlink -f "$BUN_BIN" 2>/dev/null || printf "%s" "$BUN_BIN")"',
     'mkdir -p "$HOME/.local/bin"',
+    'rm -f "$HOME/.local/bin/bun" "$HOME/.local/bin/bunx"',
     'ln -sf "$BUN_BIN" "$HOME/.local/bin/bun"',
     'if [ -x "$(dirname "$BUN_BIN")/bunx" ]; then ln -sf "$(dirname "$BUN_BIN")/bunx" "$HOME/.local/bin/bunx"; fi',
     'export PATH="$(dirname "$BUN_BIN"):$HOME/.local/bin:$PATH"',
@@ -4930,16 +4932,18 @@ function buildEnsureNode24AvailableScript(): string {
   return [
     'export HOME="/home/vercel-sandbox"',
     'mkdir -p "$HOME/.local/bin"',
-    'if [ -x "/vercel/runtimes/node24/bin/node" ]; then ln -sf "/vercel/runtimes/node24/bin/node" "$HOME/.local/bin/node"; fi',
-    'if [ -x "/vercel/runtimes/node24/bin/nodejs" ]; then ln -sf "/vercel/runtimes/node24/bin/nodejs" "$HOME/.local/bin/nodejs"; elif [ -x "/vercel/runtimes/node24/bin/node" ]; then ln -sf "/vercel/runtimes/node24/bin/node" "$HOME/.local/bin/nodejs"; fi',
-    'export PATH="$HOME/.local/bin:/vercel/runtimes/node24/bin:/vercel/runtimes/node22/bin:/vercel/runtimes/nodejs/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
-    'NODE24_BIN="$(command -v node || command -v nodejs || true)"',
+    'NODE24_BIN=""',
+    'for candidate in "/vercel/runtimes/node24/bin/node" "/vercel/runtimes/node24/bin/nodejs" "/vercel/runtimes/nodejs/bin/node" "/usr/local/bin/node" "/usr/bin/node" "/bin/node"; do if [ -x "$candidate" ]; then NODE24_BIN="$candidate"; break; fi; done',
+    'if [ -z "$NODE24_BIN" ]; then FOUND_NODE="$(PATH="/vercel/runtimes/node24/bin:/vercel/runtimes/nodejs/bin:/usr/local/bin:/usr/bin:/bin" command -v node || command -v nodejs || true)"; if [ -n "$FOUND_NODE" ] && [ "$FOUND_NODE" != "$HOME/.local/bin/node" ] && [ "$FOUND_NODE" != "$HOME/.local/bin/nodejs" ]; then NODE24_BIN="$FOUND_NODE"; fi; fi',
     'if [ -z "$NODE24_BIN" ]; then echo "Node.js runtime unavailable for ASH." >&2; exit 1; fi',
+    'NODE24_BIN="$(readlink -f "$NODE24_BIN" 2>/dev/null || printf "%s" "$NODE24_BIN")"',
     'NODE24_MAJOR="$("$NODE24_BIN" -p "process.versions.node.split(\\".\\")[0]" 2>/dev/null || true)"',
     'case "$NODE24_MAJOR" in ""|*[!0-9]*) NODE24_MAJOR=0 ;; esac',
     'if [ "$NODE24_MAJOR" -lt 24 ]; then echo "Node.js 24+ required for ASH; found $("$NODE24_BIN" --version 2>/dev/null || printf unknown)" >&2; exit 1; fi',
+    'rm -f "$HOME/.local/bin/node" "$HOME/.local/bin/nodejs"',
     'ln -sf "$NODE24_BIN" "$HOME/.local/bin/node"',
     'ln -sf "$NODE24_BIN" "$HOME/.local/bin/nodejs"',
+    'export PATH="$HOME/.local/bin:/vercel/runtimes/node24/bin:/vercel/runtimes/node22/bin:/vercel/runtimes/nodejs/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
     '"$NODE24_BIN" --version >/dev/null'
   ].join("\n")
 }
@@ -6431,15 +6435,6 @@ async function ensureClaudeCodeInstalledInSandbox(
     PATH: pathEnv,
     HOME: "/home/vercel-sandbox"
   }
-  const ensureRealNodeShim = [
-    'mkdir -p "/home/vercel-sandbox/.local/bin"',
-    "if ! command -v node >/dev/null 2>&1; then",
-    "  if command -v nodejs >/dev/null 2>&1; then",
-    '    ln -sf "$(command -v nodejs)" /home/vercel-sandbox/.local/bin/node',
-    "  fi",
-    "fi",
-    "command -v node >/dev/null 2>&1"
-  ].join("\n")
   const resolveInstalledClaudePath = async (): Promise<string | null> => {
     const result = await runSandboxCommandWithOptions(sandbox, {
       cmd: "sh",
@@ -6482,9 +6477,10 @@ async function ensureClaudeCodeInstalledInSandbox(
         'mkdir -p "/home/vercel-sandbox/.local/bin"',
         `mkdir -p "${claudeInstallRoot}"`,
         `cd "${claudeInstallRoot}"`,
-        ensureRealNodeShim,
+        buildEnsureNode24AvailableScript(),
+        buildEnsureBunAvailableScript(),
         `if [ ! -f package.json ]; then printf '%s' '{"name":"claude-code-runtime","private":true}' > package.json; fi`
-      ].join(" && ")
+      ].join("\n")
     ],
     env: sharedHomeEnv
   })

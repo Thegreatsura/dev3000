@@ -612,6 +612,7 @@ export async function createD3kSandbox(config: D3kSandboxConfig): Promise<D3kSan
           'export BUN_INSTALL="$HOME/.bun"',
           'test -x "$BUN_INSTALL/bin/bun"',
           'mkdir -p "$HOME/.local/bin"',
+          'rm -f "$HOME/.local/bin/bun" "$HOME/.local/bin/bunx"',
           'ln -sf "$BUN_INSTALL/bin/bun" "$HOME/.local/bin/bun"',
           'if [ -x "$BUN_INSTALL/bin/bunx" ]; then ln -sf "$BUN_INSTALL/bin/bunx" "$HOME/.local/bin/bunx"; fi',
           'mkdir -p /usr/local/bin && ln -sf "$BUN_INSTALL/bin/bun" /usr/local/bin/bun && { [ ! -x "$BUN_INSTALL/bin/bunx" ] || ln -sf "$BUN_INSTALL/bin/bunx" /usr/local/bin/bunx; } || true',
@@ -2068,11 +2069,10 @@ async function createAndSaveBaseSnapshot(
     const localClaudeInstallScript = `${localClaudePackageDir}/install.cjs`
     const ensureRealNodeShim = [
       'mkdir -p "/home/vercel-sandbox/.local/bin"',
-      "if ! command -v node >/dev/null 2>&1; then",
-      "  if command -v nodejs >/dev/null 2>&1; then",
-      '    ln -sf "$(command -v nodejs)" /home/vercel-sandbox/.local/bin/node',
-      "  fi",
-      "fi",
+      'NODE_BIN=""',
+      'for candidate in "/vercel/runtimes/node24/bin/node" "/vercel/runtimes/node24/bin/nodejs" "/vercel/runtimes/nodejs/bin/node" "/usr/local/bin/node" "/usr/bin/node" "/bin/node"; do if [ -x "$candidate" ]; then NODE_BIN="$candidate"; break; fi; done',
+      'if [ -z "$NODE_BIN" ]; then FOUND_NODE="$(PATH="/vercel/runtimes/node24/bin:/vercel/runtimes/nodejs/bin:/usr/local/bin:/usr/bin:/bin" command -v node || command -v nodejs || true)"; if [ -n "$FOUND_NODE" ] && [ "$FOUND_NODE" != "/home/vercel-sandbox/.local/bin/node" ] && [ "$FOUND_NODE" != "/home/vercel-sandbox/.local/bin/nodejs" ]; then NODE_BIN="$FOUND_NODE"; fi; fi',
+      'if [ -n "$NODE_BIN" ]; then NODE_BIN="$(readlink -f "$NODE_BIN" 2>/dev/null || printf "%s" "$NODE_BIN")"; rm -f /home/vercel-sandbox/.local/bin/node /home/vercel-sandbox/.local/bin/nodejs; ln -sf "$NODE_BIN" /home/vercel-sandbox/.local/bin/node; ln -sf "$NODE_BIN" /home/vercel-sandbox/.local/bin/nodejs; fi',
       "command -v node >/dev/null 2>&1"
     ].join("\n")
     const resolveInstalledClaudePath = async (): Promise<{ kind: string; path: string } | null> => {

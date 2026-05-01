@@ -15,7 +15,7 @@ import type {
 const ASH_PACKAGE_NAME = "experimental-ash"
 const ASH_PACKAGE_VERSION = "0.3.0-alpha.30"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
-const ASH_ARTIFACT_FORMAT_VERSION = 4
+const ASH_ARTIFACT_FORMAT_VERSION = 5
 
 export interface DevAgentAshArtifact {
   framework: "experimental-ash"
@@ -350,13 +350,15 @@ const ensureBunAvailableScript = [
   'if [ -z "$HOME" ]; then export HOME="/home/vercel-sandbox"; fi',
   'export BUN_INSTALL="$HOME/.bun"',
   'export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
-  'BUN_BIN="$(command -v bun || true)"',
-  'if [ -z "$BUN_BIN" ] && [ -x "$BUN_INSTALL/bin/bun" ]; then BUN_BIN="$BUN_INSTALL/bin/bun"; fi',
-  'if [ -z "$BUN_BIN" ] && [ -x "/usr/local/bin/bun" ]; then BUN_BIN="/usr/local/bin/bun"; fi',
+  'BUN_BIN=""',
+  'for candidate in "$BUN_INSTALL/bin/bun" "/usr/local/bin/bun"; do if [ -x "$candidate" ]; then BUN_BIN="$candidate"; break; fi; done',
+  'if [ -z "$BUN_BIN" ]; then FOUND_BUN="$(PATH="/usr/local/bin:/usr/bin:/bin:$PATH" command -v bun || true)"; if [ -n "$FOUND_BUN" ] && [ "$FOUND_BUN" != "$HOME/.local/bin/bun" ]; then BUN_BIN="$FOUND_BUN"; fi; fi',
   'if [ -z "$BUN_BIN" ]; then curl -fsSL https://bun.sh/install | bash; BUN_BIN="$BUN_INSTALL/bin/bun"; fi',
   'if [ ! -x "$BUN_BIN" ]; then echo "Bun unavailable after ASH sandbox bootstrap" >&2; exit 1; fi',
+  'BUN_BIN="$(readlink -f "$BUN_BIN" 2>/dev/null || printf "%s" "$BUN_BIN")"',
   'mkdir -p "$HOME/.local/bin"',
-  'ln -sf "$BUN_BIN" "$HOME/.local/bin/bun" 2>/dev/null || true',
+  'rm -f "$HOME/.local/bin/bun" "$HOME/.local/bin/bunx"',
+  'ln -sf "$BUN_BIN" "$HOME/.local/bin/bun"',
   'if [ -x "$(dirname "$BUN_BIN")/bunx" ]; then ln -sf "$(dirname "$BUN_BIN")/bunx" "$HOME/.local/bin/bunx" 2>/dev/null || true; fi',
   '"$BUN_BIN" --version >/dev/null',
 ].join("\\n");
