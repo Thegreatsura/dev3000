@@ -13,7 +13,7 @@ import type {
 } from "@/lib/dev-agents"
 
 const ASH_PACKAGE_NAME = "experimental-ash"
-const ASH_PACKAGE_VERSION = "0.3.0-alpha.28"
+const ASH_PACKAGE_VERSION = "0.3.0-alpha.30"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
 const ASH_ARTIFACT_FORMAT_VERSION = 4
 
@@ -341,18 +341,51 @@ export default httpRunStreamRoute({
 }
 
 function renderGeneratedSandboxDefinition(): string {
-  return `import { defineSandbox } from "experimental-ash/sandboxes";
+  return `import { defineSandbox, type SandboxSession } from "experimental-ash/sandboxes";
 import { defaultSandbox } from "experimental-ash/sandboxes/defaults";
 
 const projectRoot = process.env.DEV3000_PROJECT_ROOT?.trim();
+const ensureBunAvailableScript = [
+  'set -e',
+  'if [ -z "$HOME" ]; then export HOME="/home/vercel-sandbox"; fi',
+  'export BUN_INSTALL="$HOME/.bun"',
+  'export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
+  'BUN_BIN="$(command -v bun || true)"',
+  'if [ -z "$BUN_BIN" ] && [ -x "$BUN_INSTALL/bin/bun" ]; then BUN_BIN="$BUN_INSTALL/bin/bun"; fi',
+  'if [ -z "$BUN_BIN" ] && [ -x "/usr/local/bin/bun" ]; then BUN_BIN="/usr/local/bin/bun"; fi',
+  'if [ -z "$BUN_BIN" ]; then curl -fsSL https://bun.sh/install | bash; BUN_BIN="$BUN_INSTALL/bin/bun"; fi',
+  'if [ ! -x "$BUN_BIN" ]; then echo "Bun unavailable after ASH sandbox bootstrap" >&2; exit 1; fi',
+  'mkdir -p "$HOME/.local/bin"',
+  'ln -sf "$BUN_BIN" "$HOME/.local/bin/bun" 2>/dev/null || true',
+  'if [ -x "$(dirname "$BUN_BIN")/bunx" ]; then ln -sf "$(dirname "$BUN_BIN")/bunx" "$HOME/.local/bin/bunx" 2>/dev/null || true; fi',
+  '"$BUN_BIN" --version >/dev/null',
+].join("\\n");
+
+async function ensureBunAvailable(sandbox: SandboxSession) {
+  const result = await sandbox.runCommand(ensureBunAvailableScript);
+  if (result.exitCode !== 0) {
+    const output = [result.stderr, result.stdout].filter(Boolean).join("\\n").trim();
+    throw new Error(\`Failed to prepare Bun in ASH sandbox: \${output || "unknown error"}\`);
+  }
+}
 
 export default defineSandbox({
   ...defaultSandbox,
+  async bootstrap({ sandbox }) {
+    const fallbackBootstrap = defaultSandbox.bootstrap;
+    if (typeof fallbackBootstrap === "function") {
+      await fallbackBootstrap({ sandbox });
+    }
+
+    await ensureBunAvailable(sandbox);
+  },
   async onSession({ sandbox }) {
     const fallbackOnSession = defaultSandbox.onSession;
     if (typeof fallbackOnSession === "function") {
       await fallbackOnSession({ sandbox });
     }
+
+    await ensureBunAvailable(sandbox);
 
     if (!projectRoot) {
       return;
