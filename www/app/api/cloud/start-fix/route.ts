@@ -95,6 +95,7 @@ type StartFixRequestBody = {
 type WorkflowAuthSource =
   | "worker-runtime-oidc"
   | "worker-oidc-helper"
+  | "worker-project-oidc-refresh"
   | "worker-platform-header-oidc"
   | "user-access-token"
   | "forwarded-user-token"
@@ -126,6 +127,35 @@ function describeErrorForLog(error: unknown, depth = 0): Record<string, unknown>
   }
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const [, payload] = token.split(".")
+  if (!payload) return null
+
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function describeOidcClaimsForLog(token: string | undefined): Record<string, unknown> | null {
+  if (!token) return null
+  const payload = decodeJwtPayload(token)
+  if (!payload) return null
+
+  return {
+    iss: payload.iss,
+    aud: payload.aud,
+    sub: payload.sub,
+    owner: payload.owner,
+    project: payload.project,
+    environment: payload.environment,
+    deployment: payload.deployment,
+    exp: payload.exp,
+    iat: payload.iat
+  }
+}
+
 function createSelfHostedWorkflowStartOptions({
   isSelfHostedWorker,
   workflowWorldToken
@@ -153,16 +183,68 @@ function createSelfHostedWorkflowStartOptions({
   }
 }
 
+async function refreshSelfHostedProjectOidcToken({
+  isSelfHostedWorker,
+  projectRefreshToken
+}: {
+  isSelfHostedWorker: boolean
+  projectRefreshToken?: string
+}): Promise<string | undefined> {
+  if (!isSelfHostedWorker || !projectRefreshToken) return undefined
+
+  const projectId = process.env.VERCEL_PROJECT_ID?.trim()
+  const teamId = (process.env.VERCEL_ORG_ID || process.env.VERCEL_TEAM_ID)?.trim()
+
+  if (!projectId) {
+    console.warn("[Start Fix] Cannot refresh worker OIDC token without VERCEL_PROJECT_ID")
+    return undefined
+  }
+
+  const apiUrl = new URL(`https://api.vercel.com/v1/projects/${projectId}/token`)
+  apiUrl.searchParams.set("source", "vercel-oidc-refresh")
+  if (teamId) {
+    apiUrl.searchParams.set("teamId", teamId)
+  }
+
+  const response = await fetch(apiUrl.toString(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${projectRefreshToken}`
+    },
+    cache: "no-store"
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Failed to refresh worker OIDC token: ${response.status} ${errorText}`)
+  }
+
+  const data = (await response.json()) as { token?: unknown }
+  return typeof data.token === "string" && data.token.trim().length > 0 ? data.token.trim() : undefined
+}
+
 async function resolveSelfHostedWorkerOidcToken({
   headerOidcToken,
   isSelfHostedWorker,
+  projectRefreshToken,
   runtimeOidcToken
 }: {
   headerOidcToken?: string
   isSelfHostedWorker: boolean
+  projectRefreshToken?: string
   runtimeOidcToken?: string
 }): Promise<{ source: WorkflowAuthSource; token?: string }> {
   if (!isSelfHostedWorker) return { source: "missing" }
+
+  try {
+    const token = await refreshSelfHostedProjectOidcToken({
+      isSelfHostedWorker,
+      projectRefreshToken
+    })
+    if (token) return { source: "worker-project-oidc-refresh", token }
+  } catch (error) {
+    console.warn("[Start Fix] Failed to refresh worker project OIDC token", describeErrorForLog(error))
+  }
 
   try {
     const token = (await getVercelOidcToken()).trim()
@@ -393,9 +475,13 @@ export async function POST(request: Request) {
     const runtimeOidcToken = process.env.VERCEL_OIDC_TOKEN?.trim() || undefined
     const headerOidcToken = request.headers.get("x-vercel-oidc-token")?.trim() || undefined
     const fallbackVercelToken = process.env.VERCEL_TOKEN?.trim() || undefined
+    const selfHostedProjectOidcRefreshToken = isSelfHostedWorker
+      ? forwardedAccessToken || accessToken || fallbackVercelToken
+      : undefined
     const workerOidcAuth = await resolveSelfHostedWorkerOidcToken({
       headerOidcToken,
       isSelfHostedWorker,
+      projectRefreshToken: selfHostedProjectOidcRefreshToken,
       runtimeOidcToken
     })
 
@@ -441,6 +527,11 @@ export async function POST(request: Request) {
 
     workflowLog(`[Start Fix] Workflow world token available: ${!!workflowWorldToken}`)
     workflowLog(`[Start Fix] Workflow world token source: ${workflowWorldAuthSource}`)
+    if (isSelfHostedWorker) {
+      workflowLog(
+        `[Start Fix] Workflow world token claims: ${JSON.stringify(describeOidcClaimsForLog(workflowWorldToken))}`
+      )
+    }
     workflowLog(`[Start Fix] Vercel API token available: ${!!vercelApiToken}`)
     workflowLog(`[Start Fix] Vercel API token source: ${vercelApiTokenSource}`)
     workflowLog(`[Start Fix] AI Gateway token available: ${!!gatewayAuthToken}`)
