@@ -129,8 +129,8 @@ function shellEscape(value: string): string {
 
 async function ensureBunInstalled(sandbox: Sandbox, debug = false): Promise<void> {
   const whichResult = await runCommand(sandbox, "sh", [
-    "-c",
-    "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH; command -v bun || true"
+    "-lc",
+    'export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; command -v bun || true'
   ])
   if (whichResult.stdout.trim()) {
     if (debug) console.log(`[SandboxAgentBrowser] bun found at ${whichResult.stdout.trim()}`)
@@ -138,14 +138,26 @@ async function ensureBunInstalled(sandbox: Sandbox, debug = false): Promise<void
   }
 
   if (debug) console.log("[SandboxAgentBrowser] bun not found, installing...")
-  const installResult = await runCommand(sandbox, "sh", ["-c", "curl -fsSL https://bun.sh/install | bash"])
+  const installResult = await runCommand(sandbox, "sh", [
+    "-lc",
+    'export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; curl -fsSL https://bun.sh/install | bash'
+  ])
   if (installResult.exitCode !== 0) {
     throw new Error(`bun installation failed: ${installResult.stderr}`)
   }
 
   await runCommand(sandbox, "sh", [
-    "-c",
-    "mkdir -p /usr/local/bin && ln -sf ~/.bun/bin/bun /usr/local/bin/bun && ln -sf ~/.bun/bin/bunx /usr/local/bin/bunx"
+    "-lc",
+    [
+      'export HOME="/home/vercel-sandbox"',
+      'export BUN_INSTALL="$HOME/.bun"',
+      'test -x "$BUN_INSTALL/bin/bun"',
+      'mkdir -p "$HOME/.local/bin"',
+      'ln -sf "$BUN_INSTALL/bin/bun" "$HOME/.local/bin/bun"',
+      'if [ -x "$BUN_INSTALL/bin/bunx" ]; then ln -sf "$BUN_INSTALL/bin/bunx" "$HOME/.local/bin/bunx"; fi',
+      'mkdir -p /usr/local/bin && ln -sf "$BUN_INSTALL/bin/bun" /usr/local/bin/bun && { [ ! -x "$BUN_INSTALL/bin/bunx" ] || ln -sf "$BUN_INSTALL/bin/bunx" /usr/local/bin/bunx; } || true',
+      'PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:$PATH" bun --version >/dev/null'
+    ].join(" && ")
   ])
 
   if (debug) console.log("[SandboxAgentBrowser] bun installed")

@@ -4901,6 +4901,31 @@ function buildAshRuntimeAuthorizationHeader(password: string): string {
   return `Basic ${Buffer.from(`${ASH_RUNTIME_USERNAME}:${password}`, "utf8").toString("base64")}`
 }
 
+function buildSandboxToolchainEnv(): { HOME: string; PATH: string } {
+  return {
+    HOME: "/home/vercel-sandbox",
+    PATH: buildClaudeSandboxPathEnv()
+  }
+}
+
+function buildEnsureBunAvailableScript(): string {
+  return [
+    'export HOME="/home/vercel-sandbox"',
+    'export BUN_INSTALL="$HOME/.bun"',
+    'export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:/vercel/runtimes/node22/bin:/vercel/runtimes/nodejs/bin:/usr/bin:/bin:$PATH"',
+    'BUN_BIN="$(command -v bun || true)"',
+    'if [ -z "$BUN_BIN" ] && [ -x "$BUN_INSTALL/bin/bun" ]; then BUN_BIN="$BUN_INSTALL/bin/bun"; fi',
+    'if [ -z "$BUN_BIN" ] && [ -x "/usr/local/bin/bun" ]; then BUN_BIN="/usr/local/bin/bun"; fi',
+    'if [ -z "$BUN_BIN" ]; then curl -fsSL https://bun.sh/install | bash; BUN_BIN="$BUN_INSTALL/bin/bun"; fi',
+    'if [ ! -x "$BUN_BIN" ]; then echo "Bun unavailable after install attempt" >&2; exit 1; fi',
+    'mkdir -p "$HOME/.local/bin"',
+    'ln -sf "$BUN_BIN" "$HOME/.local/bin/bun"',
+    'if [ -x "$(dirname "$BUN_BIN")/bunx" ]; then ln -sf "$(dirname "$BUN_BIN")/bunx" "$HOME/.local/bin/bunx"; fi',
+    'export PATH="$(dirname "$BUN_BIN"):$HOME/.local/bin:$PATH"',
+    '"$BUN_BIN" --version >/dev/null'
+  ].join("\n")
+}
+
 async function installPackagedAshAppInSandbox(
   sandbox: Sandbox,
   tarballUrl: string,
@@ -4908,33 +4933,36 @@ async function installPackagedAshAppInSandbox(
   progressContext?: ProgressContext | null
 ): Promise<{ appRoot: string }> {
   const appRoot = buildAshRuntimeAppRoot(specHash)
-  const result = await runSandboxCommand(
+  const result = await runSandboxCommandWithOptions(
     sandbox,
-    "sh",
-    [
-      "-c",
-      [
-        "set -e",
-        `APP_ROOT=${shellEscape(appRoot)}`,
-        'if [ -d "$APP_ROOT/node_modules" ] && [ -f "$APP_ROOT/agent/agent.ts" ] && [ -f "$APP_ROOT/.output/server/index.mjs" ]; then printf "%s" "$APP_ROOT"; exit 0; fi',
-        'TMP_DIR="$(mktemp -d)"',
-        `curl -fsSL ${shellEscape(tarballUrl)} -o "$TMP_DIR/ash.tgz"`,
-        'ROOT_DIR="$(tar -tzf "$TMP_DIR/ash.tgz" | head -1 | cut -d/ -f1)"',
-        `mkdir -p ${shellEscape(ASH_RUNTIME_ROOT)}`,
-        'rm -rf "$TMP_DIR/unpack" "$APP_ROOT.tmp"',
-        'mkdir -p "$TMP_DIR/unpack"',
-        'tar -xzf "$TMP_DIR/ash.tgz" -C "$TMP_DIR/unpack"',
-        'mv "$TMP_DIR/unpack/$ROOT_DIR" "$APP_ROOT.tmp"',
-        'rm -rf "$APP_ROOT"',
-        'mv "$APP_ROOT.tmp" "$APP_ROOT"',
-        "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH",
-        "export DEV3000_ASH_RUNTIME_PASSWORD=build-only",
-        'cd "$APP_ROOT"',
-        "bun install --silent",
-        "./node_modules/.bin/ash build",
-        'printf "%s" "$APP_ROOT"'
-      ].join(" && ")
-    ],
+    {
+      cmd: "sh",
+      args: [
+        "-lc",
+        [
+          "set -e",
+          `APP_ROOT=${shellEscape(appRoot)}`,
+          'if [ -d "$APP_ROOT/node_modules" ] && [ -f "$APP_ROOT/agent/agent.ts" ] && [ -f "$APP_ROOT/.output/server/index.mjs" ]; then printf "%s" "$APP_ROOT"; exit 0; fi',
+          buildEnsureBunAvailableScript(),
+          'TMP_DIR="$(mktemp -d)"',
+          `curl -fsSL ${shellEscape(tarballUrl)} -o "$TMP_DIR/ash.tgz"`,
+          'ROOT_DIR="$(tar -tzf "$TMP_DIR/ash.tgz" | head -1 | cut -d/ -f1)"',
+          `mkdir -p ${shellEscape(ASH_RUNTIME_ROOT)}`,
+          'rm -rf "$TMP_DIR/unpack" "$APP_ROOT.tmp"',
+          'mkdir -p "$TMP_DIR/unpack"',
+          'tar -xzf "$TMP_DIR/ash.tgz" -C "$TMP_DIR/unpack"',
+          'mv "$TMP_DIR/unpack/$ROOT_DIR" "$APP_ROOT.tmp"',
+          'rm -rf "$APP_ROOT"',
+          'mv "$APP_ROOT.tmp" "$APP_ROOT"',
+          "export DEV3000_ASH_RUNTIME_PASSWORD=build-only",
+          'cd "$APP_ROOT"',
+          '"$BUN_BIN" install --silent',
+          "./node_modules/.bin/ash build",
+          'printf "%s" "$APP_ROOT"'
+        ].join("\n")
+      ],
+      env: buildSandboxToolchainEnv()
+    },
     { timeoutMs: 180000 }
   )
 
@@ -5011,10 +5039,10 @@ async function ensurePackagedAshRuntimeInSandbox(
   await sandbox.runCommand({
     cmd: "sh",
     args: [
-      "-c",
+      "-lc",
       [
         `mkdir -p ${ASH_RUNTIME_LOG_DIR}`,
-        "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH",
+        buildEnsureBunAvailableScript(),
         'mkdir -p "$HOME/.local/bin"',
         'if ! command -v node >/dev/null 2>&1 && command -v nodejs >/dev/null 2>&1; then ln -sf "$(command -v nodejs)" "$HOME/.local/bin/node"; fi',
         "export PATH=$HOME/.local/bin:$PATH",
@@ -5037,9 +5065,10 @@ async function ensurePackagedAshRuntimeInSandbox(
         `exec "$NODE_RUNTIME" ./.output/server/index.mjs >> ${logPath} 2>&1`
       ]
         .filter(Boolean)
-        .join(" && ")
+        .join("\n")
     ],
-    detached: true
+    detached: true,
+    env: buildSandboxToolchainEnv()
   })
 
   const baseUrl = await waitForAshRuntimeReady(sandbox, ASH_RUNTIME_PORT, authorization, progressContext, logPath)

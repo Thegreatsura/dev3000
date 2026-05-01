@@ -98,7 +98,7 @@ export class StepTimer {
 // After restoring from base snapshot, we clone the repo and install deps.
 
 const BASE_SNAPSHOT_KEY = "d3k-snapshots/base-snapshot.json"
-const BASE_SNAPSHOT_VERSION = "2026-04-03-agent-runtime"
+const BASE_SNAPSHOT_VERSION = "2026-05-01-agent-runtime-bun-home"
 
 /**
  * Metadata stored for the base snapshot
@@ -578,7 +578,10 @@ export async function createD3kSandbox(config: D3kSandboxConfig): Promise<D3kSan
   async function ensureBunInstalled(sandbox: Sandbox): Promise<void> {
     const whichResult = await runCommandWithLogs(sandbox, {
       cmd: "sh",
-      args: ["-c", "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH; command -v bun || true"]
+      args: [
+        "-lc",
+        'export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; command -v bun || true'
+      ]
     })
 
     if (whichResult.stdout.trim()) {
@@ -589,7 +592,10 @@ export async function createD3kSandbox(config: D3kSandboxConfig): Promise<D3kSan
     if (debug) console.log("  📦 bun not found, installing...")
     const installResult = await runCommandWithLogs(sandbox, {
       cmd: "sh",
-      args: ["-c", "curl -fsSL https://bun.sh/install | bash"]
+      args: [
+        "-lc",
+        'export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; curl -fsSL https://bun.sh/install | bash'
+      ]
     })
 
     if (installResult.exitCode !== 0) {
@@ -599,8 +605,17 @@ export async function createD3kSandbox(config: D3kSandboxConfig): Promise<D3kSan
     await runCommandWithLogs(sandbox, {
       cmd: "sh",
       args: [
-        "-c",
-        "mkdir -p /usr/local/bin && ln -sf ~/.bun/bin/bun /usr/local/bin/bun && ln -sf ~/.bun/bin/bunx /usr/local/bin/bunx"
+        "-lc",
+        [
+          'export HOME="/home/vercel-sandbox"',
+          'export BUN_INSTALL="$HOME/.bun"',
+          'test -x "$BUN_INSTALL/bin/bun"',
+          'mkdir -p "$HOME/.local/bin"',
+          'ln -sf "$BUN_INSTALL/bin/bun" "$HOME/.local/bin/bun"',
+          'if [ -x "$BUN_INSTALL/bin/bunx" ]; then ln -sf "$BUN_INSTALL/bin/bunx" "$HOME/.local/bin/bunx"; fi',
+          'mkdir -p /usr/local/bin && ln -sf "$BUN_INSTALL/bin/bun" /usr/local/bin/bun && { [ ! -x "$BUN_INSTALL/bin/bunx" ] || ln -sf "$BUN_INSTALL/bin/bunx" /usr/local/bin/bunx; } || true',
+          'PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:$PATH" bun --version >/dev/null'
+        ].join(" && ")
       ]
     })
 
@@ -1949,17 +1964,29 @@ async function createAndSaveBaseSnapshot(
     if (debug) console.log("  📦 Ensuring bun is available...")
     await reportProgress("Ensuring bun is available in shared snapshot...")
     const bunWhich = await runCmd("sh", [
-      "-c",
-      "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH; command -v bun || true"
+      "-lc",
+      'export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; command -v bun || true'
     ])
     if (!bunWhich.stdout.trim()) {
-      const bunInstall = await runCmd("sh", ["-c", "curl -fsSL https://bun.sh/install | bash"])
+      const bunInstall = await runCmd("sh", [
+        "-lc",
+        'export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; curl -fsSL https://bun.sh/install | bash'
+      ])
       if (bunInstall.exitCode !== 0) {
         throw new Error(`bun installation failed: ${bunInstall.stderr}`)
       }
       await runCmd("sh", [
-        "-c",
-        "mkdir -p /usr/local/bin && ln -sf ~/.bun/bin/bun /usr/local/bin/bun && ln -sf ~/.bun/bin/bunx /usr/local/bin/bunx"
+        "-lc",
+        [
+          'export HOME="/home/vercel-sandbox"',
+          'export BUN_INSTALL="$HOME/.bun"',
+          'test -x "$BUN_INSTALL/bin/bun"',
+          'mkdir -p "$HOME/.local/bin"',
+          'ln -sf "$BUN_INSTALL/bin/bun" "$HOME/.local/bin/bun"',
+          'if [ -x "$BUN_INSTALL/bin/bunx" ]; then ln -sf "$BUN_INSTALL/bin/bunx" "$HOME/.local/bin/bunx"; fi',
+          'mkdir -p /usr/local/bin && ln -sf "$BUN_INSTALL/bin/bun" /usr/local/bin/bun && { [ ! -x "$BUN_INSTALL/bin/bunx" ] || ln -sf "$BUN_INSTALL/bin/bunx" /usr/local/bin/bunx; } || true',
+          'PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:$PATH" bun --version >/dev/null'
+        ].join(" && ")
       ])
       if (debug) console.log("  ✅ bun installed")
     } else if (debug) {
