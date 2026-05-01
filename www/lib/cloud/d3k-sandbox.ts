@@ -98,7 +98,8 @@ export class StepTimer {
 // After restoring from base snapshot, we clone the repo and install deps.
 
 const BASE_SNAPSHOT_KEY = "d3k-snapshots/base-snapshot.json"
-const BASE_SNAPSHOT_VERSION = "2026-05-01-agent-runtime-bun-home"
+const D3K_SANDBOX_RUNTIME = "node24" as const
+const BASE_SNAPSHOT_VERSION = "2026-05-01-agent-runtime-node24-bun-home"
 
 /**
  * Metadata stored for the base snapshot
@@ -696,7 +697,7 @@ export async function createD3kSandbox(config: D3kSandboxConfig): Promise<D3kSan
       resources: { vcpus: 8 },
       timeout: timeoutMs,
       ports: [3000], // App port
-      runtime: "node22"
+      runtime: D3K_SANDBOX_RUNTIME
     })
   } catch (error) {
     const apiError = error as {
@@ -1909,7 +1910,7 @@ async function createAndSaveBaseSnapshot(
     resources: { vcpus: 8 },
     timeout: timeoutMs,
     ports: [3000],
-    runtime: "node22"
+    runtime: D3K_SANDBOX_RUNTIME
   })
 
   if (debug) console.log(`  ✅ Base sandbox created: ${baseSandbox.sandboxId}`)
@@ -2380,7 +2381,7 @@ async function createD3kSandboxFromBaseSnapshot(
     resources: { vcpus: 8 },
     timeout: timeoutMs,
     ports: [3000],
-    runtime: "node22"
+    runtime: D3K_SANDBOX_RUNTIME
   })
 
   async function runCommandWithLogs(

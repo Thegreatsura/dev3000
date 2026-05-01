@@ -4926,6 +4926,24 @@ function buildEnsureBunAvailableScript(): string {
   ].join("\n")
 }
 
+function buildEnsureNode24AvailableScript(): string {
+  return [
+    'export HOME="/home/vercel-sandbox"',
+    'mkdir -p "$HOME/.local/bin"',
+    'if [ -x "/vercel/runtimes/node24/bin/node" ]; then ln -sf "/vercel/runtimes/node24/bin/node" "$HOME/.local/bin/node"; fi',
+    'if [ -x "/vercel/runtimes/node24/bin/nodejs" ]; then ln -sf "/vercel/runtimes/node24/bin/nodejs" "$HOME/.local/bin/nodejs"; elif [ -x "/vercel/runtimes/node24/bin/node" ]; then ln -sf "/vercel/runtimes/node24/bin/node" "$HOME/.local/bin/nodejs"; fi',
+    'export PATH="$HOME/.local/bin:/vercel/runtimes/node24/bin:/vercel/runtimes/node22/bin:/vercel/runtimes/nodejs/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
+    'NODE24_BIN="$(command -v node || command -v nodejs || true)"',
+    'if [ -z "$NODE24_BIN" ]; then echo "Node.js runtime unavailable for ASH." >&2; exit 1; fi',
+    'NODE24_MAJOR="$("$NODE24_BIN" -p "process.versions.node.split(\\".\\")[0]" 2>/dev/null || true)"',
+    'case "$NODE24_MAJOR" in ""|*[!0-9]*) NODE24_MAJOR=0 ;; esac',
+    'if [ "$NODE24_MAJOR" -lt 24 ]; then echo "Node.js 24+ required for ASH; found $("$NODE24_BIN" --version 2>/dev/null || printf unknown)" >&2; exit 1; fi',
+    'ln -sf "$NODE24_BIN" "$HOME/.local/bin/node"',
+    'ln -sf "$NODE24_BIN" "$HOME/.local/bin/nodejs"',
+    '"$NODE24_BIN" --version >/dev/null'
+  ].join("\n")
+}
+
 async function installPackagedAshAppInSandbox(
   sandbox: Sandbox,
   tarballUrl: string,
@@ -4943,6 +4961,7 @@ async function installPackagedAshAppInSandbox(
           "set -e",
           `APP_ROOT=${shellEscape(appRoot)}`,
           'if [ -d "$APP_ROOT/node_modules" ] && [ -f "$APP_ROOT/agent/agent.ts" ] && [ -f "$APP_ROOT/.output/server/index.mjs" ]; then printf "%s" "$APP_ROOT"; exit 0; fi',
+          buildEnsureNode24AvailableScript(),
           buildEnsureBunAvailableScript(),
           'TMP_DIR="$(mktemp -d)"',
           `curl -fsSL ${shellEscape(tarballUrl)} -o "$TMP_DIR/ash.tgz"`,
@@ -5042,11 +5061,11 @@ async function ensurePackagedAshRuntimeInSandbox(
       "-lc",
       [
         `mkdir -p ${ASH_RUNTIME_LOG_DIR}`,
+        buildEnsureNode24AvailableScript(),
         buildEnsureBunAvailableScript(),
         'mkdir -p "$HOME/.local/bin"',
-        'if ! command -v node >/dev/null 2>&1 && command -v nodejs >/dev/null 2>&1; then ln -sf "$(command -v nodejs)" "$HOME/.local/bin/node"; fi',
         "export PATH=$HOME/.local/bin:$PATH",
-        'NODE_RUNTIME="$(command -v nodejs || command -v node || command -v bun || true)"',
+        'NODE_RUNTIME="$(command -v node || command -v nodejs || true)"',
         'if [ -z "$NODE_RUNTIME" ]; then echo "No Node.js runtime available for ASH." >&2; exit 1; fi',
         `export DEV3000_ASH_RUNTIME_USERNAME=${shellEscape(ASH_RUNTIME_USERNAME)}`,
         `export DEV3000_ASH_RUNTIME_PASSWORD=${shellEscape(runtimePassword)}`,
