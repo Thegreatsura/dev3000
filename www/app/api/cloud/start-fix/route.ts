@@ -173,8 +173,6 @@ async function resolveSelfHostedWorkerOidcToken({
   runtimeOidcToken?: string
 }): Promise<{ source: WorkflowAuthSource; token?: string }> {
   if (!isSelfHostedWorker) return { source: "missing" }
-  if (runtimeOidcToken) return { source: "worker-runtime-oidc", token: runtimeOidcToken }
-  if (headerOidcToken) return { source: "worker-platform-header-oidc", token: headerOidcToken }
 
   try {
     const token = (await getVercelOidcToken()).trim()
@@ -182,6 +180,9 @@ async function resolveSelfHostedWorkerOidcToken({
   } catch (error) {
     console.warn("[Start Fix] Failed to resolve worker OIDC token", describeErrorForLog(error))
   }
+
+  if (headerOidcToken) return { source: "worker-platform-header-oidc", token: headerOidcToken }
+  if (runtimeOidcToken) return { source: "worker-runtime-oidc", token: runtimeOidcToken }
 
   return { source: "missing" }
 }
