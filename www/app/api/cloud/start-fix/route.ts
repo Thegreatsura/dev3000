@@ -237,24 +237,48 @@ async function resolveSelfHostedWorkerOidcToken({
   if (!isSelfHostedWorker) return { source: "missing" }
 
   try {
-    const token = await refreshSelfHostedProjectOidcToken({
-      isSelfHostedWorker,
-      projectRefreshToken
-    })
-    if (token) return { source: "worker-project-oidc-refresh", token }
-  } catch (error) {
-    console.warn("[Start Fix] Failed to refresh worker project OIDC token", describeErrorForLog(error))
-  }
-
-  try {
     const token = (await getVercelOidcToken()).trim()
-    if (token) return { source: "worker-oidc-helper", token }
+    if (token) {
+      console.log("[Start Fix] Resolved worker OIDC token", {
+        source: "worker-oidc-helper",
+        claims: describeOidcClaimsForLog(token)
+      })
+      return { source: "worker-oidc-helper", token }
+    }
   } catch (error) {
     console.warn("[Start Fix] Failed to resolve worker OIDC token", describeErrorForLog(error))
   }
 
-  if (headerOidcToken) return { source: "worker-platform-header-oidc", token: headerOidcToken }
-  if (runtimeOidcToken) return { source: "worker-runtime-oidc", token: runtimeOidcToken }
+  if (headerOidcToken) {
+    console.log("[Start Fix] Resolved worker OIDC token", {
+      source: "worker-platform-header-oidc",
+      claims: describeOidcClaimsForLog(headerOidcToken)
+    })
+    return { source: "worker-platform-header-oidc", token: headerOidcToken }
+  }
+  if (runtimeOidcToken) {
+    console.log("[Start Fix] Resolved worker OIDC token", {
+      source: "worker-runtime-oidc",
+      claims: describeOidcClaimsForLog(runtimeOidcToken)
+    })
+    return { source: "worker-runtime-oidc", token: runtimeOidcToken }
+  }
+
+  try {
+    const token = await refreshSelfHostedProjectOidcToken({
+      isSelfHostedWorker,
+      projectRefreshToken
+    })
+    if (token) {
+      console.log("[Start Fix] Resolved worker OIDC token", {
+        source: "worker-project-oidc-refresh",
+        claims: describeOidcClaimsForLog(token)
+      })
+      return { source: "worker-project-oidc-refresh", token }
+    }
+  } catch (error) {
+    console.warn("[Start Fix] Failed to refresh worker project OIDC token", describeErrorForLog(error))
+  }
 
   return { source: "missing" }
 }
@@ -531,6 +555,7 @@ export async function POST(request: Request) {
       workflowLog(
         `[Start Fix] Workflow world token claims: ${JSON.stringify(describeOidcClaimsForLog(workflowWorldToken))}`
       )
+      console.log("[Start Fix] Workflow world token claims", describeOidcClaimsForLog(workflowWorldToken))
     }
     workflowLog(`[Start Fix] Vercel API token available: ${!!vercelApiToken}`)
     workflowLog(`[Start Fix] Vercel API token source: ${vercelApiTokenSource}`)
