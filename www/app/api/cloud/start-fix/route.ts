@@ -1,3 +1,4 @@
+import { getVercelOidcToken } from "@vercel/oidc"
 import { createVercelWorld } from "@workflow/world-vercel"
 import { type StartOptions, start } from "workflow/api"
 import { getCurrentUserFromRequest } from "@/lib/auth"
@@ -93,6 +94,7 @@ type StartFixRequestBody = {
 
 type WorkflowAuthSource =
   | "worker-runtime-oidc"
+  | "worker-oidc-helper"
   | "worker-platform-header-oidc"
   | "user-access-token"
   | "forwarded-user-token"
@@ -127,15 +129,15 @@ function describeErrorForLog(error: unknown, depth = 0): Record<string, unknown>
 function createSelfHostedWorkflowStartOptions({
   isSelfHostedWorker,
   skillRunnerTeam,
-  token
+  workflowWorldToken
 }: {
   isSelfHostedWorker: boolean
   skillRunnerTeam?: StartFixRequestBody["skillRunnerTeam"]
-  token?: string
+  workflowWorldToken?: string
 }): WorkflowStartOptionsWithoutDeploymentId | undefined {
   if (!isSelfHostedWorker) return undefined
 
-  const authToken = token?.trim()
+  const authToken = workflowWorldToken?.trim()
   const projectId = process.env.VERCEL_PROJECT_ID?.trim()
   const teamId = skillRunnerTeam?.id?.trim() || process.env.VERCEL_TEAM_ID?.trim()
   const environment = process.env.VERCEL_ENV?.trim() || "production"
@@ -159,6 +161,29 @@ function createSelfHostedWorkflowStartOptions({
       }
     })
   }
+}
+
+async function resolveSelfHostedWorkerOidcToken({
+  headerOidcToken,
+  isSelfHostedWorker,
+  runtimeOidcToken
+}: {
+  headerOidcToken?: string
+  isSelfHostedWorker: boolean
+  runtimeOidcToken?: string
+}): Promise<{ source: WorkflowAuthSource; token?: string }> {
+  if (!isSelfHostedWorker) return { source: "missing" }
+  if (runtimeOidcToken) return { source: "worker-runtime-oidc", token: runtimeOidcToken }
+  if (headerOidcToken) return { source: "worker-platform-header-oidc", token: headerOidcToken }
+
+  try {
+    const token = (await getVercelOidcToken()).trim()
+    if (token) return { source: "worker-oidc-helper", token }
+  } catch (error) {
+    console.warn("[Start Fix] Failed to resolve worker OIDC token", describeErrorForLog(error))
+  }
+
+  return { source: "missing" }
 }
 
 function isPrivateOrLocalHost(hostname: string): boolean {
@@ -377,6 +402,11 @@ export async function POST(request: Request) {
     const runtimeOidcToken = process.env.VERCEL_OIDC_TOKEN?.trim() || undefined
     const headerOidcToken = request.headers.get("x-vercel-oidc-token")?.trim() || undefined
     const fallbackVercelToken = process.env.VERCEL_TOKEN?.trim() || undefined
+    const workerOidcAuth = await resolveSelfHostedWorkerOidcToken({
+      headerOidcToken,
+      isSelfHostedWorker,
+      runtimeOidcToken
+    })
 
     // Resolve the token used by downstream Vercel project/sandbox APIs inside the workflow.
     // Hosted control-plane requests should prefer the signed-in user's token.
@@ -394,20 +424,32 @@ export async function POST(request: Request) {
           : runtimeOidcToken && vercelApiToken === runtimeOidcToken
             ? "control-plane-runtime-oidc"
             : "control-plane-vercel-token"
-    const gatewayAuthToken = isSelfHostedWorker ? runtimeOidcToken || headerOidcToken || undefined : vercelApiToken
+    const workflowWorldToken = isSelfHostedWorker ? workerOidcAuth.token || fallbackVercelToken : undefined
+    const workflowWorldAuthSource: WorkflowAuthSource = !workflowWorldToken
+      ? "missing"
+      : workerOidcAuth.token && workflowWorldToken === workerOidcAuth.token
+        ? workerOidcAuth.source
+        : "control-plane-vercel-token"
+    const gatewayAuthToken = isSelfHostedWorker ? workerOidcAuth.token : vercelApiToken
     const gatewayAuthSource: WorkflowAuthSource = !gatewayAuthToken
       ? "missing"
-      : isSelfHostedWorker && runtimeOidcToken && gatewayAuthToken === runtimeOidcToken
-        ? "worker-runtime-oidc"
-        : isSelfHostedWorker && headerOidcToken && gatewayAuthToken === headerOidcToken
-          ? "worker-platform-header-oidc"
-          : accessToken && gatewayAuthToken === accessToken
-            ? "user-access-token"
-            : forwardedAccessToken && gatewayAuthToken === forwardedAccessToken
-              ? "forwarded-user-token"
-              : runtimeOidcToken && gatewayAuthToken === runtimeOidcToken
-                ? "control-plane-runtime-oidc"
-                : "control-plane-vercel-token"
+      : isSelfHostedWorker && workerOidcAuth.token && gatewayAuthToken === workerOidcAuth.token
+        ? workerOidcAuth.source
+        : accessToken && gatewayAuthToken === accessToken
+          ? "user-access-token"
+          : forwardedAccessToken && gatewayAuthToken === forwardedAccessToken
+            ? "forwarded-user-token"
+            : runtimeOidcToken && gatewayAuthToken === runtimeOidcToken
+              ? "control-plane-runtime-oidc"
+              : "control-plane-vercel-token"
+    if (isSelfHostedWorker && !workflowWorldToken) {
+      throw new Error(
+        "Self-hosted runner cannot start Workflow without a Vercel OIDC token. Enable Secure Backend Access with OIDC Federation on the runner project."
+      )
+    }
+
+    workflowLog(`[Start Fix] Workflow world token available: ${!!workflowWorldToken}`)
+    workflowLog(`[Start Fix] Workflow world token source: ${workflowWorldAuthSource}`)
     workflowLog(`[Start Fix] Vercel API token available: ${!!vercelApiToken}`)
     workflowLog(`[Start Fix] Vercel API token source: ${vercelApiTokenSource}`)
     workflowLog(`[Start Fix] AI Gateway token available: ${!!gatewayAuthToken}`)
@@ -961,7 +1003,7 @@ export async function POST(request: Request) {
       const workflowStartOptions = createSelfHostedWorkflowStartOptions({
         isSelfHostedWorker,
         skillRunnerTeam: body.skillRunnerTeam,
-        token: vercelApiToken
+        workflowWorldToken
       })
       await start(cloudFixWorkflow, [workflowParams], workflowStartOptions)
       workflowLog(`[Start Fix] Workflow enqueued with runId: ${runId}`)
