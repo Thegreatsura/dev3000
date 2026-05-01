@@ -128,37 +128,27 @@ function describeErrorForLog(error: unknown, depth = 0): Record<string, unknown>
 
 function createSelfHostedWorkflowStartOptions({
   isSelfHostedWorker,
-  skillRunnerTeam,
   workflowWorldToken
 }: {
   isSelfHostedWorker: boolean
-  skillRunnerTeam?: StartFixRequestBody["skillRunnerTeam"]
   workflowWorldToken?: string
 }): WorkflowStartOptionsWithoutDeploymentId | undefined {
   if (!isSelfHostedWorker) return undefined
 
   const authToken = workflowWorldToken?.trim()
   const projectId = process.env.VERCEL_PROJECT_ID?.trim()
-  const teamId = skillRunnerTeam?.id?.trim() || process.env.VERCEL_TEAM_ID?.trim()
-  const environment = process.env.VERCEL_ENV?.trim() || "production"
 
-  if (!authToken || !projectId || !teamId) {
+  if (!authToken || !projectId) {
     console.error("[Start Fix] Missing explicit self-hosted Workflow world config", {
       hasToken: Boolean(authToken),
-      hasProjectId: Boolean(projectId),
-      hasTeamId: Boolean(teamId)
+      hasProjectId: Boolean(projectId)
     })
     return undefined
   }
 
   return {
     world: createVercelWorld({
-      token: authToken,
-      projectConfig: {
-        environment,
-        projectId,
-        teamId
-      }
+      token: authToken
     })
   }
 }
@@ -1003,7 +993,6 @@ export async function POST(request: Request) {
     try {
       const workflowStartOptions = createSelfHostedWorkflowStartOptions({
         isSelfHostedWorker,
-        skillRunnerTeam: body.skillRunnerTeam,
         workflowWorldToken
       })
       await start(cloudFixWorkflow, [workflowParams], workflowStartOptions)
