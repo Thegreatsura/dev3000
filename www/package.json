@@ -45,6 +45,7 @@
     "@vercel/sandbox": "1.9.3",
     "@vercel/sdk": "1.19.11",
     "@vercel/speed-insights": "^1.2.0",
+    "@workflow/world-vercel": "4.1.0",
     "ai": "6.0.159",
     "asciinema-player": "3.15.1",
     "autoprefixer": "10.4.27",

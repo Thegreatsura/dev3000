@@ -1,4 +1,5 @@
-import { start } from "workflow/api"
+import { createVercelWorld } from "@workflow/world-vercel"
+import { type StartOptions, start } from "workflow/api"
 import { getCurrentUserFromRequest } from "@/lib/auth"
 import { resolveDevAgentRunner } from "@/lib/cloud/dev-agent-runner"
 import { type DevAgent, ensureDevAgentAshArtifactPrepared, getDevAgent, incrementDevAgentUsage } from "@/lib/dev-agents"
@@ -98,6 +99,67 @@ type WorkflowAuthSource =
   | "control-plane-runtime-oidc"
   | "control-plane-vercel-token"
   | "missing"
+
+type WorkflowStartOptionsWithoutDeploymentId = Extract<StartOptions, { deploymentId?: undefined }>
+
+function describeErrorForLog(error: unknown, depth = 0): Record<string, unknown> {
+  if (!(error instanceof Error)) {
+    return { value: String(error) }
+  }
+
+  const extra: Record<string, unknown> = {}
+  const errorWithExtras = error as Error & { cause?: unknown; code?: unknown }
+  if (typeof errorWithExtras.code === "string" || typeof errorWithExtras.code === "number") {
+    extra.code = errorWithExtras.code
+  }
+  if (errorWithExtras.cause && depth < 3) {
+    extra.cause = describeErrorForLog(errorWithExtras.cause, depth + 1)
+  }
+
+  return {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+    ...extra
+  }
+}
+
+function createSelfHostedWorkflowStartOptions({
+  isSelfHostedWorker,
+  skillRunnerTeam,
+  token
+}: {
+  isSelfHostedWorker: boolean
+  skillRunnerTeam?: StartFixRequestBody["skillRunnerTeam"]
+  token?: string
+}): WorkflowStartOptionsWithoutDeploymentId | undefined {
+  if (!isSelfHostedWorker) return undefined
+
+  const authToken = token?.trim()
+  const projectId = process.env.VERCEL_PROJECT_ID?.trim()
+  const teamId = skillRunnerTeam?.id?.trim() || process.env.VERCEL_TEAM_ID?.trim()
+  const environment = process.env.VERCEL_ENV?.trim() || "production"
+
+  if (!authToken || !projectId || !teamId) {
+    console.error("[Start Fix] Missing explicit self-hosted Workflow world config", {
+      hasToken: Boolean(authToken),
+      hasProjectId: Boolean(projectId),
+      hasTeamId: Boolean(teamId)
+    })
+    return undefined
+  }
+
+  return {
+    world: createVercelWorld({
+      token: authToken,
+      projectConfig: {
+        environment,
+        projectId,
+        teamId
+      }
+    })
+  }
+}
 
 function isPrivateOrLocalHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase()
@@ -896,10 +958,16 @@ export async function POST(request: Request) {
     // Enqueue the workflow before returning so the request cannot finish first
     // and leave the run stuck in its initial "running" placeholder state.
     try {
-      await start(cloudFixWorkflow, [workflowParams])
+      const workflowStartOptions = createSelfHostedWorkflowStartOptions({
+        isSelfHostedWorker,
+        skillRunnerTeam: body.skillRunnerTeam,
+        token: vercelApiToken
+      })
+      await start(cloudFixWorkflow, [workflowParams], workflowStartOptions)
       workflowLog(`[Start Fix] Workflow enqueued with runId: ${runId}`)
     } catch (startError) {
       workflowError("[Start Fix] Failed to enqueue workflow:", startError)
+      console.error("[Start Fix] Failed to enqueue workflow", describeErrorForLog(startError))
 
       if (userId && projectName && runId && runTimestamp) {
         await persistWorkflowRun(
