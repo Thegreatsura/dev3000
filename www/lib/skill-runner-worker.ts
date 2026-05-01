@@ -5,9 +5,11 @@ import {
   SKILL_RUNNER_WORKER_PROJECT_NAME,
   SKILL_RUNNER_WORKER_REPO,
   SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
+  SKILL_RUNNER_WORKER_SHELL_VERSION_ENV,
   type SkillRunnerWorkerStatus,
   type SkillRunnerWorkerVersionPayload
 } from "@/lib/skill-runner-config"
+import { resolveSkillRunnerShellSource, uploadSkillRunnerShellSourceFiles } from "@/lib/skill-runner-shell-source"
 import type { VercelTeam } from "@/lib/vercel-teams"
 
 export type SkillRunnerWorkerSetupErrorCode = "github_integration_required" | "initial_deployment_missing" | "unknown"
@@ -142,7 +144,7 @@ interface VercelBlobStoreCreateResponse {
   }
 }
 
-const ALLOWED_WORKER_ENV_KEYS = [SKILL_RUNNER_WORKER_MODE_ENV] as const
+const ALLOWED_WORKER_ENV_KEYS = [SKILL_RUNNER_WORKER_MODE_ENV, SKILL_RUNNER_WORKER_SHELL_VERSION_ENV] as const
 const REQUIRED_SELF_HOSTED_WORKER_ENV_KEYS = ["BLOB_READ_WRITE_TOKEN"] as const
 const SELF_HOSTED_BLOB_STORE_REGION = "iad1"
 const SELF_HOSTED_BLOB_ENVIRONMENTS = ["production", "preview", "development"] as const
@@ -298,7 +300,7 @@ function buildInitialDeploymentCreateError(
     )
   }
 
-  return new Error(`Failed to start runner project deployment: ${status} ${errorText}`)
+  return new Error(`Failed to start runner project source deployment: ${status} ${errorText}`)
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -454,8 +456,8 @@ export function resolveSkillRunnerWorkerStatus(
   return "ready"
 }
 
-function buildWorkerEnvInputs(): VercelProjectEnvInput[] {
-  return [
+function buildWorkerEnvInputs(workerShellVersion: string | undefined): VercelProjectEnvInput[] {
+  const inputs: VercelProjectEnvInput[] = [
     {
       key: SKILL_RUNNER_WORKER_MODE_ENV,
       value: "1",
@@ -463,6 +465,17 @@ function buildWorkerEnvInputs(): VercelProjectEnvInput[] {
       target: ["production", "preview", "development"]
     }
   ]
+
+  if (workerShellVersion) {
+    inputs.push({
+      key: SKILL_RUNNER_WORKER_SHELL_VERSION_ENV,
+      value: workerShellVersion,
+      type: "encrypted",
+      target: ["production", "preview", "development"]
+    })
+  }
+
+  return inputs
 }
 
 async function listTeamBlobStores(accessToken: string, team: VercelTeam) {
@@ -706,56 +719,7 @@ async function redeployWorkerProject(
   team: VercelTeam,
   project: SkillRunnerWorkerProject
 ): Promise<string | null> {
-  if (!project.latestDeploymentId) {
-    return null
-  }
-
-  const apiUrl = new URL("https://api.vercel.com/v13/deployments")
-  apiUrl.searchParams.set("teamId", team.id)
-  apiUrl.searchParams.set("forceNew", "1")
-
-  const response = await fetch(apiUrl.toString(), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      deploymentId: project.latestDeploymentId,
-      name: project.projectName,
-      project: project.projectId,
-      target: "production",
-      withLatestCommit: true
-    }),
-    cache: "no-store"
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Failed to redeploy runner project: ${response.status} ${errorText}`)
-  }
-
-  const data = (await response.json()) as { id?: string }
-  return data.id?.trim() || null
-}
-
-function buildInitialDeploymentGitSource(branch: string): {
-  type: "github"
-  org: string
-  repo: string
-  ref: string
-} {
-  const [org, repo] = SKILL_RUNNER_WORKER_REPO.split("/")
-  if (!org || !repo) {
-    throw new Error(`Invalid runner repo: ${SKILL_RUNNER_WORKER_REPO}`)
-  }
-
-  return {
-    type: "github",
-    org,
-    repo,
-    ref: branch
-  }
+  return createInitialWorkerDeployment(accessToken, team, project)
 }
 
 async function createInitialWorkerDeployment(
@@ -763,6 +727,17 @@ async function createInitialWorkerDeployment(
   team: VercelTeam,
   project: SkillRunnerWorkerProject
 ): Promise<string> {
+  const workerShellVersion = project.desiredWorkerGitSha || (await resolveDesiredWorkerGitSha(resolveWorkerGitBranch()))
+  if (!workerShellVersion) {
+    throw new Error("Could not resolve the desired runner shell source version.")
+  }
+
+  const source = await resolveSkillRunnerShellSource(workerShellVersion, workerShellVersion)
+  const files = await uploadSkillRunnerShellSourceFiles({
+    accessToken,
+    source,
+    teamId: team.id
+  })
   const apiUrl = new URL("https://api.vercel.com/v13/deployments")
   apiUrl.searchParams.set("teamId", team.id)
   apiUrl.searchParams.set("forceNew", "1")
@@ -778,7 +753,19 @@ async function createInitialWorkerDeployment(
       name: project.projectName,
       project: project.projectId,
       target: "production",
-      gitSource: buildInitialDeploymentGitSource(project.desiredWorkerBranch || resolveWorkerGitBranch()),
+      files,
+      gitMetadata: {
+        commitMessage: `Deploy d3k skill runner shell ${source.version}`,
+        commitRef: project.desiredWorkerBranch || resolveWorkerGitBranch(),
+        commitSha: source.commit,
+        dirty: false,
+        remoteUrl: `https://github.com/${SKILL_RUNNER_WORKER_REPO}.git`
+      },
+      meta: {
+        d3kSkillRunnerShellCommit: source.commit,
+        d3kSkillRunnerShellVersion: source.version,
+        d3kSkillRunnerSource: "deployment-files"
+      },
       projectSettings: {
         framework: "nextjs",
         rootDirectory: SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
@@ -979,7 +966,10 @@ export async function installSkillRunnerWorkerProject(
   }
 
   const project = existing ?? (await createWorkerProject(accessToken, team))
-  await upsertWorkerProjectEnv(accessToken, team, project, buildWorkerEnvInputs())
+  const desiredWorkerBranch = project.desiredWorkerBranch || resolveWorkerGitBranch()
+  const desiredWorkerShellVersion =
+    project.desiredWorkerGitSha || (await resolveDesiredWorkerGitSha(desiredWorkerBranch))
+  await upsertWorkerProjectEnv(accessToken, team, project, buildWorkerEnvInputs(desiredWorkerShellVersion))
   await ensureWorkerBlobStore(accessToken, team, project)
 
   let deploymentId = project.latestDeploymentId || null

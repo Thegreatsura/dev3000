@@ -94,6 +94,13 @@ jobs:
       - name: Run release checks
         run: ./scripts/test-release.sh
 
+      - name: Build skill-runner shell manifest
+        env:
+          SKILL_RUNNER_SHELL_VERSION: ${{ env.RELEASE_VERSION }}
+          SKILL_RUNNER_SHELL_COMMIT: ${{ github.sha }}
+          SKILL_RUNNER_SHELL_SOURCE_BASE_URL: https://raw.githubusercontent.com/vercel-labs/dev3000/${{ github.sha }}
+        run: bun run build:skill-runner-shell
+
       - name: Build release binaries
         run: ./scripts/prepare-platform-packages.sh
 
@@ -138,6 +145,14 @@ jobs:
               --title "$TAG" \
               --notes-file /tmp/release-notes.md
           fi
+
+      - name: Upload skill-runner shell manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "v$RELEASE_VERSION" \
+            ".artifacts/skill-runner-shell/skill-runner-shell-$RELEASE_VERSION.json" \
+            --clobber
 
       - name: Calculate next canary version
         run: |

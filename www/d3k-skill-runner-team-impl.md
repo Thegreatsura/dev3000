@@ -366,20 +366,48 @@ Need explicit repair UX for:
 
 ## Deployment Strategy
 
-Use a dedicated worker app/repo, not the full `dev3000-www` app.
+Provision workers from a versioned source artifact, not from a Vercel Git-connected deployment.
 
-The worker should contain only:
+The important distinction is that the customer team should never need GitHub access to `vercel-labs/dev3000`. The control plane can fetch public source files from the OSS repo, upload those files to Vercel's Deployment Files API with their SHA1 digests, and then create a deployment with `files` instead of `gitSource`.
 
-- workflow code
-- run/report APIs needed by the control plane
-- minimal auth and storage plumbing
+MVP artifact shape:
 
-Benefits:
+- release asset: `skill-runner-shell-<version>.json`
+- source base: immutable raw GitHub URLs pinned to the release commit SHA
+- deployment root: repo root
+- worker root directory: `www`
+- project settings:
+  - framework: `nextjs`
+  - rootDirectory: `www`
+  - nodeVersion: `24.x`
+  - sourceFilesOutsideRootDirectory: `true`
 
-- smaller deploy surface
-- cleaner permission model
-- easier versioning and rollout
-- fewer accidental control-plane dependencies
+The current MVP can publish the full `www` source shell with `SKILL_RUNNER_WORKER_MODE=1`. That keeps the runner behavior identical to the tested path while removing the Vercel Git integration requirement. We can split a smaller dedicated worker app later once the source-artifact path is proven.
+
+### Source Artifact Release Flow
+
+On release:
+
+1. Build `skill-runner-shell-<version>.json` with `bun run build:skill-runner-shell`.
+2. The manifest lists every tracked source file needed for the worker shell.
+3. Each file entry includes:
+   - repo-relative path
+   - SHA1 digest expected by Vercel's `/v2/files` upload endpoint
+   - byte size
+   - immutable raw GitHub content URL pinned to the release commit
+4. Upload the manifest to the GitHub release.
+
+On install or upgrade:
+
+1. Resolve the desired runner shell version.
+2. Download the release manifest.
+3. Fetch each source file from `contentUrl`.
+4. Upload each file to `/v2/files?teamId=<team>` with `x-vercel-digest` and `Content-Length`.
+5. Create a deployment with `/v13/deployments` using `files: [{ file, sha, size }]`.
+6. Do not send `gitSource`.
+7. Set `SKILL_RUNNER_WORKER_SHELL_VERSION` on the worker project so health checks work even though the deployment has no Git checkout.
+
+This gives us a concrete compatibility boundary: the control plane asks for a known runner shell version, the worker reports the installed version, and repair/redeploy means applying the same source manifest again.
 
 ## Versioning Strategy
 
@@ -394,6 +422,8 @@ When the control plane talks to a worker:
 - include expected protocol version
 - worker returns its version
 - if incompatible, mark the worker as needing upgrade
+
+For the source-artifact flow, `worker app version` is the runner shell artifact version. In stable releases this should match the root package release version. In dogfood or canary flows it can be a commit SHA, as long as the manifest source URLs are immutable.
 
 ## Security Model
 
@@ -464,12 +494,13 @@ The worker remains source of truth for detailed run payloads.
 
 ### 1. Git Linkage
 
-If worker deployment depends on a repo connection, provisioning can get messy.
+If worker deployment depends on `gitSource`, external teams need a Vercel-side Git provider connection to `vercel-labs/dev3000` even though the repo is public.
 
 Mitigation:
 
-- use a dedicated worker repo and automated project creation
-- keep the deployment shape standardized
+- deploy from the versioned source artifact with the Deployment Files API
+- keep Git-source deployment only as an internal dogfood fallback, if at all
+- make worker version checks use `SKILL_RUNNER_WORKER_SHELL_VERSION`, not Git metadata
 
 ### 2. Env Drift
 
@@ -522,7 +553,9 @@ Recommendation:
 - integration install flow
 - create worker project in team
 - inject env vars
-- initial deployment and health check
+- download runner shell manifest
+- upload files to Vercel
+- initial file-based deployment and health check
 
 ### Phase 3: Execution
 
