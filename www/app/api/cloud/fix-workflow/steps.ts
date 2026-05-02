@@ -5430,16 +5430,39 @@ async function readAshRuntimeSessionStream(
     }
 
     let streamResponse: Response
+    const idleTimeoutMs =
+      rawEvents.length === 0 ? ASH_STREAM_INITIAL_IDLE_TIMEOUT_MS : ASH_STREAM_ACTIVE_IDLE_TIMEOUT_MS
+    const remainingIdleMs = idleTimeoutMs - (Date.now() - lastEventAt)
+    if (remainingIdleMs <= 0) {
+      throw await buildRuntimeStreamFailure(
+        `ASH runtime stream produced no events for ${Math.round(idleTimeoutMs / 1000)}s (session ${sessionId}, received ${rawEvents.length} event(s)).`
+      )
+    }
+
+    const streamFetchController = new AbortController()
+    let streamFetchTimedOut = false
+    const streamFetchTimeout = setTimeout(() => {
+      streamFetchTimedOut = true
+      streamFetchController.abort()
+    }, remainingIdleMs)
     try {
       streamResponse = await fetch(streamUrl, {
-        headers: { authorization, "cache-control": "no-store" }
+        headers: { authorization, "cache-control": "no-store" },
+        signal: streamFetchController.signal
       })
     } catch (error) {
+      if (streamFetchTimedOut) {
+        throw await buildRuntimeStreamFailure(
+          `ASH runtime stream did not respond for ${Math.round(idleTimeoutMs / 1000)}s (session ${sessionId}, received ${rawEvents.length} event(s)).`
+        )
+      }
       if (isAshRuntimeStreamDisconnectError(error)) {
         await reconnect(formatErrorMessage(error))
         continue
       }
       throw error
+    } finally {
+      clearTimeout(streamFetchTimeout)
     }
 
     if (!streamResponse.ok || !streamResponse.body) {
