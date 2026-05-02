@@ -36,6 +36,10 @@ const ASH_RUNTIME_USERNAME = "dev3000"
 const ASH_RUNTIME_ROOT = "/home/vercel-sandbox/.dev3000/ash-apps"
 const ASH_RUNTIME_LOG_DIR = "/home/vercel-sandbox/.d3k/logs"
 const ASH_TASK_ROUTE_PATH = "/.well-known/ash/v1/task"
+const ASH_STREAM_INITIAL_IDLE_TIMEOUT_MS = 45000
+const ASH_STREAM_ACTIVE_IDLE_TIMEOUT_MS = 120000
+const ASH_DIAGNOSTIC_HTTP_TIMEOUT_MS = 8000
+const ASH_DIAGNOSTIC_SANDBOX_TIMEOUT_MS = 15000
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
 const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const ANALYZE_TO_NDJSON_SCRIPT = `#!/usr/bin/env node
@@ -5054,7 +5058,7 @@ async function ensurePackagedAshRuntimeInSandbox(
   projectRoot: string,
   gatewayAuthToken: string | undefined,
   progressContext?: ProgressContext | null
-): Promise<{ authorization: string; baseUrl: string }> {
+): Promise<{ authorization: string; baseUrl: string; logPath: string; workflowDataDir: string }> {
   const { appRoot } = await installPackagedAshAppInSandbox(sandbox, tarballUrl, specHash, progressContext)
   const runtimeRunKey = progressContext?.runId || crypto.randomUUID()
   const runtimePassword = buildAshRuntimePassword(runtimeRunKey, specHash)
@@ -5103,7 +5107,147 @@ async function ensurePackagedAshRuntimeInSandbox(
   })
 
   const baseUrl = await waitForAshRuntimeReady(sandbox, ASH_RUNTIME_PORT, authorization, progressContext, logPath)
-  return { authorization, baseUrl }
+  return { authorization, baseUrl, logPath, workflowDataDir }
+}
+
+type AshRuntimeDiagnostics = (sessionId: string) => Promise<string>
+
+function redactAshDiagnosticSecrets(value: string): string {
+  return value
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]")
+    .replace(/\b(Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]")
+    .replace(/\b(authorization|Authorization)\s*[:=]\s*[^\s]+/g, "$1=[redacted]")
+    .replace(
+      /\b(VERCEL_OIDC_TOKEN|AI_GATEWAY_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY)\s*[:=]\s*[^\s]+/g,
+      "$1=[redacted]"
+    )
+}
+
+function formatAshDiagnosticText(raw: string, maxLength = 5000): string {
+  const redacted = redactAshDiagnosticSecrets(raw).trim()
+  if (!redacted) return "<empty>"
+  return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}... <truncated>` : redacted
+}
+
+async function fetchAshRuntimeDiagnosticRoute(
+  baseUrl: string,
+  authorization: string,
+  label: string,
+  path: string
+): Promise<string> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), ASH_DIAGNOSTIC_HTTP_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(new URL(path, baseUrl), {
+      headers: { authorization, "cache-control": "no-store" },
+      signal: controller.signal
+    })
+    const body = await response.text()
+    return `${label} ${response.status}: ${formatAshDiagnosticText(body, 1000)}`
+  } catch (error) {
+    return `${label} failed: ${formatErrorMessage(error)}`
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+async function collectAshRuntimeHttpDiagnostics(
+  baseUrl: string,
+  authorization: string,
+  sessionId: string
+): Promise<string> {
+  const encodedSessionId = encodeURIComponent(sessionId)
+  const probes = [
+    ["health", "/.well-known/ash/v1/health"],
+    ["runs", "/api/runs?sortOrder=desc&limit=10"],
+    ["run", `/api/runs/${encodedSessionId}`],
+    ["events", `/api/runs/${encodedSessionId}/events?sortOrder=asc&limit=20`],
+    ["steps", `/api/runs/${encodedSessionId}/steps?sortOrder=asc&limit=20`]
+  ] as const
+
+  const results = await Promise.all(
+    probes.map(([label, path]) => fetchAshRuntimeDiagnosticRoute(baseUrl, authorization, label, path))
+  )
+
+  return results.join("\n")
+}
+
+async function collectAshRuntimeSandboxDiagnostics(
+  sandbox: Sandbox,
+  logPath: string,
+  workflowDataDir: string,
+  sessionId: string
+): Promise<string> {
+  const streamName = `${sessionId.replace(/^wrun_/, "strm_")}_user`
+  const script = [
+    "set +e",
+    "printf '__ASH_RUNTIME_LOG__\\n'",
+    `if [ -f ${shellEscape(logPath)} ]; then tail -n 220 ${shellEscape(logPath)}; else echo "missing ${logPath}"; fi`,
+    "printf '\\n__WORKFLOW_TREE__\\n'",
+    `if [ -d ${shellEscape(workflowDataDir)} ]; then find ${shellEscape(workflowDataDir)} -maxdepth 5 -type f -printf '%p %s bytes\\n' | sort | head -240; else echo "missing ${workflowDataDir}"; fi`,
+    "printf '\\n__SESSION_JSON__\\n'",
+    [
+      "for f in",
+      `${shellEscape(workflowDataDir)}/runs/${shellEscape(sessionId)}.json`,
+      `${shellEscape(workflowDataDir)}/events/${shellEscape(sessionId)}-*.json`,
+      `${shellEscape(workflowDataDir)}/steps/${shellEscape(sessionId)}-*.json`,
+      `${shellEscape(workflowDataDir)}/streams/runs/${shellEscape(sessionId)}.json`,
+      "; do",
+      '[ -e "$f" ] || continue;',
+      'printf "\\n=== %s ===\\n" "$f";',
+      'sed -n "1,180p" "$f";',
+      "done"
+    ].join(" "),
+    "printf '\\n__SESSION_CHUNKS__\\n'",
+    `ls -l ${shellEscape(workflowDataDir)}/streams/chunks/${shellEscape(streamName)}-* 2>/dev/null || true`
+  ].join("\n")
+
+  const result = await runSandboxCommandWithOptions(
+    sandbox,
+    {
+      cmd: "sh",
+      args: ["-lc", script],
+      env: buildSandboxToolchainEnv()
+    },
+    { timeoutMs: ASH_DIAGNOSTIC_SANDBOX_TIMEOUT_MS }
+  )
+
+  return formatAshDiagnosticText(
+    [`exit=${result.exitCode}`, result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n"),
+    6000
+  )
+}
+
+async function collectAshRuntimeDiagnostics({
+  authorization,
+  baseUrl,
+  logPath,
+  progressContext,
+  sandbox,
+  sessionId,
+  workflowDataDir
+}: {
+  authorization: string
+  baseUrl: string
+  logPath: string
+  progressContext?: ProgressContext | null
+  sandbox: Sandbox
+  sessionId: string
+  workflowDataDir: string
+}): Promise<string> {
+  const [httpDiagnostics, sandboxDiagnostics] = await Promise.all([
+    collectAshRuntimeHttpDiagnostics(baseUrl, authorization, sessionId),
+    collectAshRuntimeSandboxDiagnostics(sandbox, logPath, workflowDataDir, sessionId)
+  ])
+  const diagnostics = formatAshDiagnosticText(
+    [`ASH HTTP diagnostics`, httpDiagnostics, "", "ASH sandbox diagnostics", sandboxDiagnostics].join("\n"),
+    9000
+  )
+
+  await appendProgressLog(progressContext, `[ASH] Runtime diagnostics: ${formatClaudeOutputPreview(diagnostics, 1800)}`)
+
+  return diagnostics
 }
 
 function buildAshRuntimePromptPrefix({
@@ -5126,12 +5270,32 @@ function buildAshRuntimePromptPrefix({
 - Prefer direct code changes and targeted validation over broad exploration.`
 }
 
+async function readAshStreamChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number
+): Promise<ReadableStreamReadResult<Uint8Array> | { timedOut: true }> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<{ timedOut: true }>((resolve) => {
+        timeoutId = setTimeout(() => resolve({ timedOut: true }), timeoutMs)
+      })
+    ])
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+  }
+}
+
 async function readAshRuntimeSessionStream(
   baseUrl: string,
   authorization: string,
   sessionId: string,
   streamPath?: string,
-  progressContext?: ProgressContext | null
+  progressContext?: ProgressContext | null,
+  diagnostics?: AshRuntimeDiagnostics
 ): Promise<{
   rawEvents: string[]
   resultText: string
@@ -5163,6 +5327,28 @@ async function readAshRuntimeSessionStream(
   let terminalState: "waiting" | "completed" = "completed"
   let reachedTurnBoundary = false
   let remainingReconnectAttempts = maxReconnectAttempts
+
+  const buildRuntimeStreamFailure = async (summary: string) => {
+    let details = ""
+    if (diagnostics) {
+      try {
+        details = await diagnostics(sessionId)
+      } catch (error) {
+        details = `Failed to collect ASH runtime diagnostics: ${formatErrorMessage(error)}`
+      }
+    }
+
+    if (details) {
+      await appendProgressLog(
+        progressContext,
+        `[ASH] ${summary} diagnostics=${formatClaudeOutputPreview(details, 1800)}`
+      )
+    } else {
+      await appendProgressLog(progressContext, `[ASH] ${summary}`)
+    }
+
+    return new Error(details ? `${summary}\n\n${details}` : summary)
+  }
 
   const processEventLine = async (line: string) => {
     rawEvents.push(line)
@@ -5225,7 +5411,7 @@ async function readAshRuntimeSessionStream(
 
   const reconnect = async (reason: string) => {
     if (remainingReconnectAttempts <= 0) {
-      throw new Error(`ASH runtime stream disconnected before a turn boundary: ${reason}`)
+      throw await buildRuntimeStreamFailure(`ASH runtime stream disconnected before a turn boundary: ${reason}`)
     }
     remainingReconnectAttempts -= 1
     await appendProgressLog(
@@ -5266,7 +5452,17 @@ async function readAshRuntimeSessionStream(
 
     while (true) {
       try {
-        const { done, value } = await reader.read()
+        const idleTimeoutMs =
+          rawEvents.length === 0 ? ASH_STREAM_INITIAL_IDLE_TIMEOUT_MS : ASH_STREAM_ACTIVE_IDLE_TIMEOUT_MS
+        const readResult = await readAshStreamChunkWithTimeout(reader, idleTimeoutMs)
+        if ("timedOut" in readResult) {
+          await reader.cancel().catch(() => {})
+          throw await buildRuntimeStreamFailure(
+            `ASH runtime stream produced no events for ${Math.round(idleTimeoutMs / 1000)}s (session ${sessionId}, received ${rawEvents.length} event(s)).`
+          )
+        }
+
+        const { done, value } = readResult
         if (done) {
           const trailing = buffer.trim()
           buffer = ""
@@ -5373,7 +5569,8 @@ async function streamAshRuntimeTask(
   baseUrl: string,
   authorization: string,
   prompt: string,
-  progressContext?: ProgressContext | null
+  progressContext?: ProgressContext | null,
+  diagnostics?: AshRuntimeDiagnostics
 ): Promise<{
   rawEvents: string[]
   resultText: string
@@ -5410,12 +5607,14 @@ async function streamAshRuntimeTask(
   if (!sessionId) {
     throw new Error("ASH runtime task route did not return a session id.")
   }
+  await appendProgressLog(progressContext, `[ASH] Session started: ${sessionId}`)
   const streamResult = await readAshRuntimeSessionStream(
     baseUrl,
     authorization,
     sessionId,
     taskPayload.streamPath,
-    progressContext
+    progressContext,
+    diagnostics
   )
 
   return {
@@ -5471,7 +5670,7 @@ async function runAshAgentInSandbox(
   const effectiveProjectRoot = projectDir
     ? `/vercel/sandbox/${projectDir.replace(/^\/+|\/+$/g, "")}`
     : "/vercel/sandbox"
-  const { authorization, baseUrl } = await ensurePackagedAshRuntimeInSandbox(
+  const { authorization, baseUrl, logPath, workflowDataDir } = await ensurePackagedAshRuntimeInSandbox(
     sandbox,
     devAgentAshTarballUrl,
     progressContext?.devAgentSpecHash,
@@ -5518,7 +5717,17 @@ async function runAshAgentInSandbox(
   transcript.push("## ASH Runtime Session")
   transcript.push("")
   await appendProgressLog(progressContext, `[ASH] Task run: ${taskPrompt.prompt.slice(0, 120)}`)
-  const result = await streamAshRuntimeTask(baseUrl, authorization, taskPrompt.prompt, progressContext)
+  const diagnostics: AshRuntimeDiagnostics = (sessionId) =>
+    collectAshRuntimeDiagnostics({
+      authorization,
+      baseUrl,
+      logPath,
+      progressContext,
+      sandbox,
+      sessionId,
+      workflowDataDir
+    })
+  const result = await streamAshRuntimeTask(baseUrl, authorization, taskPrompt.prompt, progressContext, diagnostics)
 
   transcript.push(`### ${taskPrompt.label}`)
   transcript.push("")

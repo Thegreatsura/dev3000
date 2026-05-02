@@ -13,9 +13,9 @@ import type {
 } from "@/lib/dev-agents"
 
 const ASH_PACKAGE_NAME = "experimental-ash"
-const ASH_PACKAGE_VERSION = "0.3.0-alpha.30"
+const ASH_PACKAGE_VERSION = "0.3.0-alpha.31"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
-const ASH_ARTIFACT_FORMAT_VERSION = 7
+const ASH_ARTIFACT_FORMAT_VERSION = 8
 
 export interface DevAgentAshArtifact {
   framework: "experimental-ash"
