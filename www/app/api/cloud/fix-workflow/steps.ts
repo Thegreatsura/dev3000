@@ -10,7 +10,7 @@ import { Sandbox } from "@vercel/sandbox"
 import { generateText } from "ai"
 import { createVercelGateway, getAiGatewayAuthSource, requireAiGatewayAuthToken } from "@/lib/ai-gateway"
 import { putBlobAndBuildUrl, readBlobJson } from "@/lib/blob-store"
-import { getOrCreateD3kSandbox, type SandboxTimingData, StepTimer } from "@/lib/cloud/d3k-sandbox"
+import { D3K_ASH_RUNTIME_PORT, getOrCreateD3kSandbox, type SandboxTimingData, StepTimer } from "@/lib/cloud/d3k-sandbox"
 import { SandboxAgentBrowser } from "@/lib/cloud/sandbox-agent-browser"
 import {
   type DevAgentEarlyExitRule,
@@ -31,7 +31,7 @@ const workflowLog = console.log
 const TURBOPACK_MIN_NEXT_VERSION = "16.1.0"
 const SUCCESS_EVAL_MODEL = "openai/gpt-5.4"
 const CLAUDE_CODE_PACKAGE = "@anthropic-ai/claude-code"
-const ASH_RUNTIME_PORT = 3100
+const ASH_RUNTIME_PORT = D3K_ASH_RUNTIME_PORT
 const ASH_RUNTIME_USERNAME = "dev3000"
 const ASH_RUNTIME_ROOT = "/home/vercel-sandbox/.dev3000/ash-apps"
 const ASH_RUNTIME_LOG_DIR = "/home/vercel-sandbox/.d3k/logs"
@@ -7194,8 +7194,9 @@ async function runAgentWithDiagnoseTool(
     } catch (ashRuntimeError) {
       await appendProgressLog(
         progressContext,
-        `[ASH] Runtime path failed, falling back to Claude CLI: ${ashRuntimeError instanceof Error ? ashRuntimeError.message : String(ashRuntimeError)}`
+        `[ASH] Runtime path failed; aborting without Claude CLI fallback: ${ashRuntimeError instanceof Error ? ashRuntimeError.message : String(ashRuntimeError)}`
       )
+      throw ashRuntimeError
     }
   }
 

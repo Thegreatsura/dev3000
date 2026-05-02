@@ -18,6 +18,9 @@ const DEFAULT_SANDBOX_TIMEOUT = "60m" as const
 const CLAUDE_CODE_PACKAGE = "@anthropic-ai/claude-code"
 const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
+export const D3K_DEV_SERVER_PORT = 3000
+export const D3K_ASH_RUNTIME_PORT = 3100
+const D3K_SANDBOX_EXPOSED_PORTS = [D3K_DEV_SERVER_PORT, D3K_ASH_RUNTIME_PORT]
 
 // ============================================================
 // TIMING UTILITIES
@@ -697,7 +700,7 @@ export async function createD3kSandbox(config: D3kSandboxConfig): Promise<D3kSan
       source,
       resources: { vcpus: 8 },
       timeout: timeoutMs,
-      ports: [3000], // App port
+      ports: D3K_SANDBOX_EXPOSED_PORTS,
       runtime: D3K_SANDBOX_RUNTIME
     })
   } catch (error) {
@@ -1684,7 +1687,7 @@ export async function createD3kSandboxFromSnapshot(config: D3kSandboxFromSnapsho
       snapshotId
     },
     timeout: timeoutMs,
-    ports: [3000] // App port
+    ports: D3K_SANDBOX_EXPOSED_PORTS
   })
 
   if (debug) console.log(`  ✅ Sandbox created from snapshot: ${sandbox.sandboxId}`)
@@ -1910,7 +1913,7 @@ async function createAndSaveBaseSnapshot(
   const baseSandbox = await Sandbox.create({
     resources: { vcpus: 8 },
     timeout: timeoutMs,
-    ports: [3000],
+    ports: D3K_SANDBOX_EXPOSED_PORTS,
     runtime: D3K_SANDBOX_RUNTIME
   })
 
@@ -2380,7 +2383,7 @@ async function createD3kSandboxFromBaseSnapshot(
     },
     resources: { vcpus: 8 },
     timeout: timeoutMs,
-    ports: [3000],
+    ports: D3K_SANDBOX_EXPOSED_PORTS,
     runtime: D3K_SANDBOX_RUNTIME
   })
 
