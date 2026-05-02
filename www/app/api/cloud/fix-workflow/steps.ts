@@ -4977,6 +4977,8 @@ async function installPackagedAshAppInSandbox(
           'mv "$TMP_DIR/unpack/$ROOT_DIR" "$APP_ROOT.tmp"',
           'rm -rf "$APP_ROOT"',
           'mv "$APP_ROOT.tmp" "$APP_ROOT"',
+          "unset VERCEL VERCEL_DEPLOYMENT_ID VERCEL_PROJECT_ID VERCEL_URL VERCEL_ENV VERCEL_TARGET_ENV",
+          "export WORKFLOW_TARGET_WORLD=local",
           "export DEV3000_ASH_RUNTIME_PASSWORD=build-only",
           'cd "$APP_ROOT"',
           '"$BUN_BIN" install --silent',
@@ -5054,9 +5056,11 @@ async function ensurePackagedAshRuntimeInSandbox(
   progressContext?: ProgressContext | null
 ): Promise<{ authorization: string; baseUrl: string }> {
   const { appRoot } = await installPackagedAshAppInSandbox(sandbox, tarballUrl, specHash, progressContext)
-  const runtimePassword = buildAshRuntimePassword(progressContext?.runId || crypto.randomUUID(), specHash)
+  const runtimeRunKey = progressContext?.runId || crypto.randomUUID()
+  const runtimePassword = buildAshRuntimePassword(runtimeRunKey, specHash)
   const authorization = buildAshRuntimeAuthorizationHeader(runtimePassword)
   const logPath = `${ASH_RUNTIME_LOG_DIR}/ash-runtime.log`
+  const workflowDataDir = `${ASH_RUNTIME_ROOT}/workflow-data/${runtimeRunKey.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
   await appendProgressLog(progressContext, `[ASH] Starting built runtime on port ${ASH_RUNTIME_PORT}...`)
   await sandbox.runCommand({
@@ -5071,6 +5075,10 @@ async function ensurePackagedAshRuntimeInSandbox(
         "export PATH=$HOME/.local/bin:$PATH",
         'NODE_RUNTIME="$(command -v node || command -v nodejs || true)"',
         'if [ -z "$NODE_RUNTIME" ]; then echo "No Node.js runtime available for ASH." >&2; exit 1; fi',
+        "unset VERCEL VERCEL_DEPLOYMENT_ID VERCEL_PROJECT_ID VERCEL_URL VERCEL_ENV VERCEL_TARGET_ENV",
+        "export WORKFLOW_TARGET_WORLD=local",
+        `export WORKFLOW_LOCAL_BASE_URL=http://127.0.0.1:${ASH_RUNTIME_PORT}`,
+        `export WORKFLOW_LOCAL_DATA_DIR=${shellEscape(workflowDataDir)}`,
         `export DEV3000_ASH_RUNTIME_USERNAME=${shellEscape(ASH_RUNTIME_USERNAME)}`,
         `export DEV3000_ASH_RUNTIME_PASSWORD=${shellEscape(runtimePassword)}`,
         `export DEV3000_PROJECT_ROOT=${shellEscape(projectRoot)}`,
@@ -5083,7 +5091,7 @@ async function ensurePackagedAshRuntimeInSandbox(
         `: > ${logPath}`,
         `printf 'launching packaged ASH runtime\\n' >> ${logPath}`,
         `cd ${shellEscape(appRoot)}`,
-        `printf 'runtime=%s\\npwd=%s\\nport=%s\\n' "$NODE_RUNTIME" "$(pwd)" "${ASH_RUNTIME_PORT}" >> ${logPath}`,
+        `printf 'runtime=%s\\npwd=%s\\nport=%s\\nworkflow_world=%s\\nworkflow_base_url=%s\\nworkflow_data_dir=%s\\nvercel=%s\\n' "$NODE_RUNTIME" "$(pwd)" "${ASH_RUNTIME_PORT}" "$WORKFLOW_TARGET_WORLD" "$WORKFLOW_LOCAL_BASE_URL" "$WORKFLOW_LOCAL_DATA_DIR" "$VERCEL" >> ${logPath}`,
         `ls -l ./.output/server/index.mjs >> ${logPath} 2>&1 || true`,
         `exec "$NODE_RUNTIME" ./.output/server/index.mjs >> ${logPath} 2>&1`
       ]
