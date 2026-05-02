@@ -1051,8 +1051,8 @@ chmod 0600 "$HOME/.npmrc" ".npmrc"`
     }
 
     // Prefer the preinstalled d3k from the shared snapshot. If it is missing or
-    // invalid, install the packaged CLI with Bun; /vercel/sandbox is the target
-    // project checkout here, not the dev3000 repo.
+    // invalid, install the packaged CLI into the sandbox user prefix;
+    // /vercel/sandbox is the target project checkout here, not the dev3000 repo.
     let d3kVerification = await verifyInstalledD3kBinary(sandbox, { cwd: sandboxCwd, debug })
     let d3kInstallResult = { exitCode: 0, stdout: "", stderr: "" }
 
@@ -1068,7 +1068,7 @@ chmod 0600 "$HOME/.npmrc" ".npmrc"`
         cmd: "sh",
         args: [
           "-lc",
-          `export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"; bun add -g ${D3K_CLI_PACKAGE} ${D3K_NATIVE_PACKAGE}`
+          `export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export NPM_CONFIG_PREFIX="$HOME/.local"; mkdir -p "$HOME/.local/bin"; export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"; npm install -g ${D3K_CLI_PACKAGE} ${D3K_NATIVE_PACKAGE}`
         ],
         stdout: debug ? process.stdout : undefined,
         stderr: debug ? process.stderr : undefined
@@ -1974,7 +1974,7 @@ async function createAndSaveBaseSnapshot(
     await reportProgress("Installing d3k in shared snapshot...")
     const d3kInstall = await runCmd("sh", [
       "-lc",
-      `export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"; bun add -g ${D3K_CLI_PACKAGE} ${D3K_NATIVE_PACKAGE}`
+      `export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export NPM_CONFIG_PREFIX="$HOME/.local"; mkdir -p "$HOME/.local/bin"; export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"; npm install -g ${D3K_CLI_PACKAGE} ${D3K_NATIVE_PACKAGE}`
     ])
     let d3kVerify =
       d3kInstall.exitCode === 0
