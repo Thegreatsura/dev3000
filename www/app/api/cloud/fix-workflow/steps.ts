@@ -5327,6 +5327,7 @@ async function readAshRuntimeSessionStream(
   let terminalState: "waiting" | "completed" = "completed"
   let reachedTurnBoundary = false
   let remainingReconnectAttempts = maxReconnectAttempts
+  let lastEventAt = Date.now()
 
   const buildRuntimeStreamFailure = async (summary: string) => {
     let details = ""
@@ -5352,6 +5353,7 @@ async function readAshRuntimeSessionStream(
 
   const processEventLine = async (line: string) => {
     rawEvents.push(line)
+    lastEventAt = Date.now()
     const event = JSON.parse(line) as {
       type: string
       data?: Record<string, unknown>
@@ -5454,7 +5456,15 @@ async function readAshRuntimeSessionStream(
       try {
         const idleTimeoutMs =
           rawEvents.length === 0 ? ASH_STREAM_INITIAL_IDLE_TIMEOUT_MS : ASH_STREAM_ACTIVE_IDLE_TIMEOUT_MS
-        const readResult = await readAshStreamChunkWithTimeout(reader, idleTimeoutMs)
+        const remainingIdleMs = idleTimeoutMs - (Date.now() - lastEventAt)
+        if (remainingIdleMs <= 0) {
+          await reader.cancel().catch(() => {})
+          throw await buildRuntimeStreamFailure(
+            `ASH runtime stream produced no events for ${Math.round(idleTimeoutMs / 1000)}s (session ${sessionId}, received ${rawEvents.length} event(s)).`
+          )
+        }
+
+        const readResult = await readAshStreamChunkWithTimeout(reader, remainingIdleMs)
         if ("timedOut" in readResult) {
           await reader.cancel().catch(() => {})
           throw await buildRuntimeStreamFailure(
