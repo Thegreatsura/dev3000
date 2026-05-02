@@ -4986,6 +4986,7 @@ async function installPackagedAshAppInSandbox(
           "export DEV3000_ASH_RUNTIME_PASSWORD=build-only",
           'cd "$APP_ROOT"',
           '"$BUN_BIN" install --silent',
+          '"$NODE24_BIN" scripts/patch-workflow-world-local.mjs',
           "./node_modules/.bin/ash build",
           'printf "%s" "$APP_ROOT"'
         ].join("\n")
@@ -5095,6 +5096,7 @@ async function ensurePackagedAshRuntimeInSandbox(
         `: > ${logPath}`,
         `printf 'launching packaged ASH runtime\\n' >> ${logPath}`,
         `cd ${shellEscape(appRoot)}`,
+        `if [ -f scripts/patch-workflow-world-local.mjs ]; then "$NODE_RUNTIME" scripts/patch-workflow-world-local.mjs >> ${logPath} 2>&1 || { echo "ASH workflow schema patch failed" >> ${logPath}; exit 1; }; fi`,
         `printf 'runtime=%s\\npwd=%s\\nport=%s\\nworkflow_world=%s\\nworkflow_base_url=%s\\nworkflow_data_dir=%s\\nvercel=%s\\n' "$NODE_RUNTIME" "$(pwd)" "${ASH_RUNTIME_PORT}" "$WORKFLOW_TARGET_WORLD" "$WORKFLOW_LOCAL_BASE_URL" "$WORKFLOW_LOCAL_DATA_DIR" "$VERCEL" >> ${logPath}`,
         `ls -l ./.output/server/index.mjs >> ${logPath} 2>&1 || true`,
         `exec "$NODE_RUNTIME" ./.output/server/index.mjs >> ${logPath} 2>&1`

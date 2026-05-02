@@ -15,7 +15,7 @@ import type {
 const ASH_PACKAGE_NAME = "experimental-ash"
 const ASH_PACKAGE_VERSION = "0.3.0-alpha.31"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
-const ASH_ARTIFACT_FORMAT_VERSION = 8
+const ASH_ARTIFACT_FORMAT_VERSION = 9
 
 export interface DevAgentAshArtifact {
   framework: "experimental-ash"
@@ -418,6 +418,36 @@ function renderGeneratedWorkspaceReadme(): string {
 `
 }
 
+function renderWorkflowWorldLocalPatchScript(): string {
+  return `import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+
+const require = createRequire(import.meta.url);
+const worldEntry = require.resolve("@workflow/world");
+const runsPath = path.join(path.dirname(worldEntry), "runs.js");
+const source = readFileSync(runsPath, "utf8");
+
+// @workflow/world-local writes undefined run fields to JSON, which removes
+// the keys. The @workflow/world run schema must accept those absent keys.
+const patched = source.replace(
+  /(output|error|completedAt): z\\.undefined\\(\\)(?!\\.optional\\(\\)),/g,
+  "$1: z.undefined().optional(),",
+);
+
+if (patched === source) {
+  if (/(output|error|completedAt): z\\.undefined\\(\\),/.test(source)) {
+    throw new Error("Failed to patch @workflow/world run schema.");
+  }
+
+  console.log("workflow world-local schema patch already applied");
+} else {
+  writeFileSync(runsPath, patched);
+  console.log("patched @workflow/world run schema for local workflow storage");
+}
+`
+}
+
 function renderGeneratedAgentDefinition(input: DevAgentAshInput): string {
   const preferredModel = escapeTypeScriptString(formatAiAgent(input.aiAgent))
 
@@ -663,6 +693,7 @@ export async function createDevAgentAshSource(input: DevAgentAshInput, revision:
           scripts: {
             build: "ash build",
             dev: "ash dev",
+            "patch-workflow-world": "node scripts/patch-workflow-world-local.mjs",
             typecheck: "tsgo"
           },
           dependencies: {
@@ -742,6 +773,10 @@ export async function createDevAgentAshSource(input: DevAgentAshInput, revision:
     {
       path: "agent/sandbox/workspace/README.md",
       content: renderGeneratedWorkspaceReadme()
+    },
+    {
+      path: "scripts/patch-workflow-world-local.mjs",
+      content: renderWorkflowWorldLocalPatchScript()
     },
     {
       path: "agent/spec.json",
