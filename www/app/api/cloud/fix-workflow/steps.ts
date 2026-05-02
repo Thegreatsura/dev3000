@@ -38,6 +38,7 @@ const ASH_RUNTIME_LOG_DIR = "/home/vercel-sandbox/.d3k/logs"
 const ASH_TASK_ROUTE_PATH = "/.well-known/ash/v1/task"
 const ASH_STREAM_INITIAL_IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const ASH_STREAM_ACTIVE_IDLE_TIMEOUT_MS = 15 * 60 * 1000
+const ASH_STREAM_RECONNECT_POLL_MS = 30 * 1000
 const ASH_DIAGNOSTIC_HTTP_TIMEOUT_MS = 8000
 const ASH_DIAGNOSTIC_SANDBOX_TIMEOUT_MS = 15000
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
@@ -5311,7 +5312,7 @@ async function readAshRuntimeSessionStream(
     totalTokens: number
   }
 }> {
-  const maxReconnectAttempts = 8
+  const maxReconnectAttempts = 240
   const reconnectDelayMs = 1000
   const resolvedStreamPath =
     typeof streamPath === "string" && streamPath.trim().length > 0
@@ -5414,15 +5415,26 @@ async function readAshRuntimeSessionStream(
     }
   }
 
-  const reconnect = async (reason: string) => {
-    if (remainingReconnectAttempts <= 0) {
+  const reconnect = async (
+    reason: string,
+    options: {
+      countAgainstLimit?: boolean
+      quiet?: boolean
+    } = {}
+  ) => {
+    const countAgainstLimit = options.countAgainstLimit ?? true
+    if (countAgainstLimit && remainingReconnectAttempts <= 0) {
       throw await buildRuntimeStreamFailure(`ASH runtime stream disconnected before a turn boundary: ${reason}`)
     }
-    remainingReconnectAttempts -= 1
-    await appendProgressLog(
-      progressContext,
-      `[ASH] Runtime stream disconnected; reconnecting from event ${rawEvents.length} (${reason})`
-    )
+    if (countAgainstLimit) {
+      remainingReconnectAttempts -= 1
+    }
+    if (!options.quiet) {
+      await appendProgressLog(
+        progressContext,
+        `[ASH] Runtime stream disconnected; reconnecting from event ${rawEvents.length} (${reason})`
+      )
+    }
     await new Promise((resolve) => setTimeout(resolve, reconnectDelayMs))
   }
 
@@ -5444,10 +5456,13 @@ async function readAshRuntimeSessionStream(
 
     const streamFetchController = new AbortController()
     let streamFetchTimedOut = false
-    const streamFetchTimeout = setTimeout(() => {
-      streamFetchTimedOut = true
-      streamFetchController.abort()
-    }, remainingIdleMs)
+    const streamFetchTimeout = setTimeout(
+      () => {
+        streamFetchTimedOut = true
+        streamFetchController.abort()
+      },
+      Math.min(remainingIdleMs, ASH_STREAM_RECONNECT_POLL_MS)
+    )
     try {
       streamResponse = await fetch(streamUrl, {
         headers: { authorization, "cache-control": "no-store" },
@@ -5455,9 +5470,8 @@ async function readAshRuntimeSessionStream(
       })
     } catch (error) {
       if (streamFetchTimedOut) {
-        throw await buildRuntimeStreamFailure(
-          `ASH runtime stream did not respond for ${Math.round(idleTimeoutMs / 1000)}s (session ${sessionId}, received ${rawEvents.length} event(s)).`
-        )
+        await reconnect("stream request idle", { countAgainstLimit: false, quiet: true })
+        continue
       }
       if (isAshRuntimeStreamDisconnectError(error)) {
         await reconnect(formatErrorMessage(error))
@@ -5477,6 +5491,8 @@ async function readAshRuntimeSessionStream(
     const reader = streamResponse.body.getReader()
     let buffer = ""
     let disconnected = false
+    let disconnectReason = "socket disconnected"
+    let idleDisconnect = false
 
     while (true) {
       try {
@@ -5490,12 +5506,16 @@ async function readAshRuntimeSessionStream(
           )
         }
 
-        const readResult = await readAshStreamChunkWithTimeout(reader, remainingIdleMs)
+        const readResult = await readAshStreamChunkWithTimeout(
+          reader,
+          Math.min(remainingIdleMs, ASH_STREAM_RECONNECT_POLL_MS)
+        )
         if ("timedOut" in readResult) {
           await reader.cancel().catch(() => {})
-          throw await buildRuntimeStreamFailure(
-            `ASH runtime stream produced no events for ${Math.round(idleTimeoutMs / 1000)}s (session ${sessionId}, received ${rawEvents.length} event(s)).`
-          )
+          disconnected = true
+          disconnectReason = "stream idle"
+          idleDisconnect = true
+          break
         }
 
         const { done, value } = readResult
@@ -5523,6 +5543,7 @@ async function readAshRuntimeSessionStream(
       } catch (error) {
         if (isAshRuntimeStreamDisconnectError(error)) {
           disconnected = true
+          disconnectReason = formatErrorMessage(error)
           break
         }
         throw error
@@ -5542,11 +5563,11 @@ async function readAshRuntimeSessionStream(
     }
 
     if (disconnected) {
-      await reconnect("socket disconnected")
+      await reconnect(disconnectReason, { countAgainstLimit: !idleDisconnect, quiet: idleDisconnect })
       continue
     }
 
-    await reconnect("stream ended before a turn boundary")
+    await reconnect("stream ended before a turn boundary", { countAgainstLimit: false, quiet: true })
   }
 
   if (terminalError) {
