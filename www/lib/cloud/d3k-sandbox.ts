@@ -18,6 +18,8 @@ const DEFAULT_SANDBOX_TIMEOUT = "60m" as const
 const CLAUDE_CODE_PACKAGE = "@anthropic-ai/claude-code"
 const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
+const D3K_CLI_PACKAGE = "dev3000@latest"
+const D3K_NATIVE_PACKAGE = "@d3k/linux-x64@latest"
 export const D3K_DEV_SERVER_PORT = 3000
 export const D3K_ASH_RUNTIME_PORT = 3100
 const D3K_SANDBOX_EXPOSED_PORTS = [D3K_DEV_SERVER_PORT, D3K_ASH_RUNTIME_PORT]
@@ -102,7 +104,7 @@ export class StepTimer {
 
 const BASE_SNAPSHOT_KEY = "d3k-snapshots/base-snapshot.json"
 const D3K_SANDBOX_RUNTIME = "node24" as const
-const BASE_SNAPSHOT_VERSION = "2026-05-01-agent-runtime-node24-bun-home"
+const BASE_SNAPSHOT_VERSION = "2026-05-01-agent-runtime-node24-bun-d3k-packaged"
 
 /**
  * Metadata stored for the base snapshot
@@ -305,7 +307,10 @@ async function verifyInstalledD3kBinary(
 ): Promise<{ ok: boolean; detail: string }> {
   const result = await sandbox.runCommand({
     cmd: "sh",
-    args: ["-c", "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH; d3k --version"],
+    args: [
+      "-c",
+      "export PATH=$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH; d3k --version"
+    ],
     cwd: options?.cwd
   })
 
@@ -907,9 +912,8 @@ node -v
       await reportProgress(`Using Node ${requiredNodeMajor}.x in sandbox`)
     }
 
-    if (resolvedPackageManager === "bun") {
-      await ensureBunInstalled(sandbox)
-    }
+    await ensureBunInstalled(sandbox)
+    await reportProgress("[Sandbox] Bun runtime ready")
 
     const resolvedNpmToken = resolveNpmTokenValue(npmToken, projectEnv)
     if (resolvedNpmToken) {
@@ -1046,8 +1050,9 @@ chmod 0600 "$HOME/.npmrc" ".npmrc"`
       console.log("  🔍 ===== END CHROMIUM DIAGNOSTIC TEST =====")
     }
 
-    // Prefer the preinstalled d3k from the shared snapshot. Only reinstall if that
-    // binary is missing or invalid.
+    // Prefer the preinstalled d3k from the shared snapshot. If it is missing or
+    // invalid, install the packaged CLI with Bun; /vercel/sandbox is the target
+    // project checkout here, not the dev3000 repo.
     let d3kVerification = await verifyInstalledD3kBinary(sandbox, { cwd: sandboxCwd, debug })
     let d3kInstallResult = { exitCode: 0, stdout: "", stderr: "" }
 
@@ -1056,62 +1061,26 @@ chmod 0600 "$HOME/.npmrc" ".npmrc"`
       await reportProgress("[Sandbox] Using preinstalled d3k from shared snapshot")
     } else {
       if (debug) {
-        console.log(`  ⚠️ Preinstalled d3k failed validation, attempting repo install: ${d3kVerification.detail}`)
+        console.log(`  ⚠️ Preinstalled d3k failed validation, installing packaged CLI: ${d3kVerification.detail}`)
       }
-
-      // Install d3k from the checked-out repo first so sandbox runs use the current commit.
-      if (debug) console.log("  📦 Installing d3k globally from repo checkout (/vercel/sandbox)")
-      d3kInstallResult =
-        resolvedPackageManager === "bun"
-          ? await runCommandWithLogs(sandbox, {
-              cmd: "sh",
-              args: [
-                "-c",
-                "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH; bun add -g /vercel/sandbox /vercel/sandbox/packages/d3k-linux-x64"
-              ],
-              stdout: debug ? process.stdout : undefined,
-              stderr: debug ? process.stderr : undefined
-            })
-          : await runCommandWithLogs(sandbox, {
-              cmd: "pnpm",
-              args: ["i", "-g", "/vercel/sandbox", "/vercel/sandbox/packages/d3k-linux-x64"],
-              stdout: debug ? process.stdout : undefined,
-              stderr: debug ? process.stderr : undefined
-            })
-
-      d3kVerification =
-        d3kInstallResult.exitCode === 0
-          ? await verifyInstalledD3kBinary(sandbox, { cwd: sandboxCwd, debug })
-          : { ok: false, detail: d3kInstallResult.stderr || d3kInstallResult.stdout || "install failed" }
-
-      if (!d3kVerification.ok) {
-        if (debug) {
-          console.log(
-            `  ⚠️ Local d3k install failed validation, falling back to npm (dev3000@latest): ${d3kVerification.detail}`
-          )
-        }
-        await reportProgress("[Sandbox] Local d3k install unusable, falling back to published package")
-        d3kInstallResult =
-          resolvedPackageManager === "bun"
-            ? await runCommandWithLogs(sandbox, {
-                cmd: "sh",
-                args: [
-                  "-c",
-                  "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH; bun add -g dev3000@latest @d3k/linux-x64@latest"
-                ],
-                stdout: debug ? process.stdout : undefined,
-                stderr: debug ? process.stderr : undefined
-              })
-            : await runCommandWithLogs(sandbox, {
-                cmd: "pnpm",
-                args: ["i", "-g", "dev3000@latest", "@d3k/linux-x64@latest"],
-                stdout: debug ? process.stdout : undefined,
-                stderr: debug ? process.stderr : undefined
-              })
-      }
+      await reportProgress("[Sandbox] Installing packaged d3k runtime tools")
+      d3kInstallResult = await runCommandWithLogs(sandbox, {
+        cmd: "sh",
+        args: [
+          "-lc",
+          `export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"; bun add -g ${D3K_CLI_PACKAGE} ${D3K_NATIVE_PACKAGE}`
+        ],
+        stdout: debug ? process.stdout : undefined,
+        stderr: debug ? process.stderr : undefined
+      })
 
       if (d3kInstallResult.exitCode !== 0) {
-        throw new Error(`d3k installation failed with exit code ${d3kInstallResult.exitCode}`)
+        const stderrTail = d3kInstallResult.stderr.slice(-1000)
+        const stdoutTail = d3kInstallResult.stdout.slice(-500)
+        await reportProgress(`[Sandbox] Packaged d3k install failed (exit ${d3kInstallResult.exitCode})`)
+        throw new Error(
+          `d3k installation failed with exit code ${d3kInstallResult.exitCode}\nStderr: ${stderrTail || "(empty)"}\nStdout: ${stdoutTail || "(empty)"}`
+        )
       }
 
       d3kVerification = await verifyInstalledD3kBinary(sandbox, { cwd: sandboxCwd, debug })
@@ -1998,29 +1967,37 @@ async function createAndSaveBaseSnapshot(
       console.log(`  ✅ bun found at ${bunWhich.stdout.trim()}`)
     }
 
-    // Install d3k globally from the checked-out repo first so sandbox runs use the current commit.
-    if (debug) console.log("  📦 Installing d3k globally from repo checkout...")
+    // Install d3k globally from the published package. The shared snapshot is
+    // reused across arbitrary target projects, so it cannot rely on the target
+    // checkout containing the dev3000 CLI source.
+    if (debug) console.log("  📦 Installing packaged d3k globally...")
     await reportProgress("Installing d3k in shared snapshot...")
-    let d3kInstall = await runCmd("pnpm", ["i", "-g", "/vercel/sandbox", "/vercel/sandbox/packages/d3k-linux-x64"])
+    const d3kInstall = await runCmd("sh", [
+      "-lc",
+      `export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"; bun add -g ${D3K_CLI_PACKAGE} ${D3K_NATIVE_PACKAGE}`
+    ])
     let d3kVerify =
       d3kInstall.exitCode === 0
-        ? await runCmd("sh", ["-c", "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH; d3k --version"])
+        ? await runCmd("sh", [
+            "-c",
+            "export PATH=$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH; d3k --version"
+          ])
         : d3kInstall
     const localD3kMissingBinary = `${d3kVerify.stdout}\n${d3kVerify.stderr}`.includes(
       "Could not find @d3k/linux-x64 binary"
     )
     if (d3kInstall.exitCode !== 0 || d3kVerify.exitCode !== 0 || localD3kMissingBinary) {
-      if (debug) {
-        console.log(
-          `  ⚠️ Local d3k install failed validation, falling back to npm (dev3000@latest): ${(d3kVerify.stderr || d3kVerify.stdout || d3kInstall.stderr).slice(-400)}`
-        )
-      }
-      d3kInstall = await runCmd("pnpm", ["i", "-g", "dev3000@latest", "@d3k/linux-x64@latest"])
+      throw new Error(
+        `d3k install is not runnable: ${(d3kVerify.stderr || d3kVerify.stdout || d3kInstall.stderr).slice(-1000)}`
+      )
     }
     if (d3kInstall.exitCode !== 0) {
       throw new Error(`d3k installation failed: ${d3kInstall.stderr}`)
     }
-    d3kVerify = await runCmd("sh", ["-c", "export PATH=$HOME/.bun/bin:/usr/local/bin:$PATH; d3k --version"])
+    d3kVerify = await runCmd("sh", [
+      "-c",
+      "export PATH=$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH; d3k --version"
+    ])
     const publishedD3kMissingBinary = `${d3kVerify.stdout}\n${d3kVerify.stderr}`.includes(
       "Could not find @d3k/linux-x64 binary"
     )
