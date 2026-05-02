@@ -18,7 +18,6 @@ const DEFAULT_SANDBOX_TIMEOUT = "60m" as const
 const CLAUDE_CODE_PACKAGE = "@anthropic-ai/claude-code"
 const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
-const D3K_CLI_PACKAGE = "dev3000@latest"
 const D3K_NATIVE_PACKAGE = "@d3k/linux-x64@latest"
 export const D3K_DEV_SERVER_PORT = 3000
 export const D3K_ASH_RUNTIME_PORT = 3100
@@ -245,6 +244,32 @@ type PackageManager = "bun" | "pnpm" | "npm" | "yarn"
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+function buildInstallPackagedD3kScript(): string {
+  return [
+    "set -euo pipefail",
+    'export HOME="/home/vercel-sandbox"',
+    'export BUN_INSTALL="$HOME/.bun"',
+    'export NPM_CONFIG_PREFIX="$HOME/.local"',
+    'mkdir -p "$HOME/.local/bin"',
+    'export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"',
+    `if ! npm install -g ${D3K_NATIVE_PACKAGE}; then`,
+    "  status=$?",
+    '  echo "npm install failed (exit $status)" >&2',
+    '  for log in "$HOME"/.npm/_logs/*debug*; do',
+    '    [ -f "$log" ] || continue',
+    '    echo "=== $log ===" >&2',
+    '    tail -120 "$log" >&2',
+    "  done",
+    '  exit "$status"',
+    "fi",
+    'D3K_NATIVE_ROOT="$(npm root -g)/@d3k/linux-x64"',
+    'test -x "$D3K_NATIVE_ROOT/bin/dev3000"',
+    'ln -sf "$D3K_NATIVE_ROOT/bin/dev3000" "$HOME/.local/bin/d3k"',
+    'ln -sf "$D3K_NATIVE_ROOT/bin/dev3000" "$HOME/.local/bin/dev3000"',
+    "d3k --version"
+  ].join("\n")
 }
 
 function looksLikeD3kCommand(command: string): boolean {
@@ -1066,10 +1091,7 @@ chmod 0600 "$HOME/.npmrc" ".npmrc"`
       await reportProgress("[Sandbox] Installing packaged d3k runtime tools")
       d3kInstallResult = await runCommandWithLogs(sandbox, {
         cmd: "sh",
-        args: [
-          "-lc",
-          `export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export NPM_CONFIG_PREFIX="$HOME/.local"; mkdir -p "$HOME/.local/bin"; export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"; npm install -g ${D3K_CLI_PACKAGE} ${D3K_NATIVE_PACKAGE}`
-        ],
+        args: ["-lc", buildInstallPackagedD3kScript()],
         stdout: debug ? process.stdout : undefined,
         stderr: debug ? process.stderr : undefined
       })
@@ -1972,10 +1994,7 @@ async function createAndSaveBaseSnapshot(
     // checkout containing the dev3000 CLI source.
     if (debug) console.log("  📦 Installing packaged d3k globally...")
     await reportProgress("Installing d3k in shared snapshot...")
-    const d3kInstall = await runCmd("sh", [
-      "-lc",
-      `export HOME="/home/vercel-sandbox"; export BUN_INSTALL="$HOME/.bun"; export NPM_CONFIG_PREFIX="$HOME/.local"; mkdir -p "$HOME/.local/bin"; export PATH="$HOME/.local/bin:$BUN_INSTALL/bin:/usr/local/bin:/vercel/runtimes/node24/bin:$PATH"; npm install -g ${D3K_CLI_PACKAGE} ${D3K_NATIVE_PACKAGE}`
-    ])
+    const d3kInstall = await runCmd("sh", ["-lc", buildInstallPackagedD3kScript()])
     let d3kVerify =
       d3kInstall.exitCode === 0
         ? await runCmd("sh", [
