@@ -4988,6 +4988,7 @@ async function installPackagedAshAppInSandbox(
           '"$BUN_BIN" install --silent',
           '"$NODE24_BIN" scripts/patch-workflow-world-local.mjs',
           "./node_modules/.bin/ash build",
+          '"$NODE24_BIN" scripts/patch-workflow-world-local.mjs',
           'printf "%s" "$APP_ROOT"'
         ].join("\n")
       ],

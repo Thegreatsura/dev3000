@@ -15,7 +15,7 @@ import type {
 const ASH_PACKAGE_NAME = "experimental-ash"
 const ASH_PACKAGE_VERSION = "0.3.0-alpha.31"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
-const ASH_ARTIFACT_FORMAT_VERSION = 9
+const ASH_ARTIFACT_FORMAT_VERSION = 10
 
 export interface DevAgentAshArtifact {
   framework: "experimental-ash"
@@ -341,15 +341,22 @@ export default httpRunStreamRoute({
 }
 
 function renderGeneratedSandboxDefinition(): string {
-  return `import { defineSandbox, type SandboxSession } from "experimental-ash/sandboxes";
-import { defaultSandbox } from "experimental-ash/sandboxes/defaults";
+  return `import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
+import { defineSandbox, type SandboxCommandResult, type SandboxReadFileOptions, type SandboxSession } from "experimental-ash/sandboxes";
 
 const projectRoot = process.env.DEV3000_PROJECT_ROOT?.trim();
+const workspaceRoot = "/workspace";
+const execFileAsync = promisify(execFile);
+
 const ensureBunAvailableScript = [
   'set -e',
   'if [ -z "$HOME" ]; then export HOME="/home/vercel-sandbox"; fi',
   'export BUN_INSTALL="$HOME/.bun"',
-  'export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
+  'export PATH="$BUN_INSTALL/bin:$HOME/.local/bin:/usr/local/bin:/vercel/runtimes/node24/bin:/vercel/runtimes/node22/bin:/vercel/runtimes/nodejs/bin:/usr/bin:/bin:$PATH"',
   'BUN_BIN=""',
   'for candidate in "$BUN_INSTALL/bin/bun" "/usr/local/bin/bun"; do if [ -x "$candidate" ]; then BUN_BIN="$candidate"; break; fi; done',
   'if [ -z "$BUN_BIN" ]; then FOUND_BUN="$(PATH="/usr/local/bin:/usr/bin:/bin:$PATH" command -v bun || true)"; if [ -n "$FOUND_BUN" ] && [ "$FOUND_BUN" != "$HOME/.local/bin/bun" ]; then BUN_BIN="$FOUND_BUN"; fi; fi',
@@ -371,39 +378,197 @@ async function ensureBunAvailable(sandbox: SandboxSession) {
   }
 }
 
+function shellEnv(): NodeJS.ProcessEnv {
+  const home = process.env.HOME || "/home/vercel-sandbox";
+  return {
+    ...process.env,
+    BUN_INSTALL: \`\${home}/.bun\`,
+    HOME: home,
+    PATH: [
+      \`\${home}/.bun/bin\`,
+      \`\${home}/.local/bin\`,
+      "/usr/local/bin",
+      "/vercel/runtimes/node24/bin",
+      "/vercel/runtimes/node22/bin",
+      "/vercel/runtimes/nodejs/bin",
+      "/usr/bin",
+      "/bin",
+      process.env.PATH || "",
+    ]
+      .filter(Boolean)
+      .join(":"),
+  };
+}
+
+async function runHostShell(command: string, cwd = workspaceRoot): Promise<SandboxCommandResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync("bash", ["-lc", command], {
+      cwd,
+      env: shellEnv(),
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return { exitCode: 0, stdout: String(stdout || ""), stderr: String(stderr || "") };
+  } catch (error) {
+    const failure = error as {
+      code?: unknown;
+      message?: string;
+      stderr?: string | Buffer;
+      stdout?: string | Buffer;
+    };
+    return {
+      exitCode: typeof failure.code === "number" ? failure.code : 1,
+      stdout: String(failure.stdout || ""),
+      stderr: String(failure.stderr || failure.message || ""),
+    };
+  }
+}
+
+function resolveWorkspacePath(input: string): string {
+  if (!input || input === ".") {
+    return workspaceRoot;
+  }
+
+  if (input === workspaceRoot) {
+    return workspaceRoot;
+  }
+
+  if (input.startsWith(\`\${workspaceRoot}/\`)) {
+    return path.join(workspaceRoot, input.slice(workspaceRoot.length + 1));
+  }
+
+  if (path.isAbsolute(input)) {
+    return input;
+  }
+
+  return path.join(workspaceRoot, input);
+}
+
+async function pathExists(input: string): Promise<boolean> {
+  try {
+    await access(input, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function prepareWorkspace() {
+  if (!projectRoot) {
+    throw new Error("DEV3000_PROJECT_ROOT is required for the dev3000 ASH sandbox backend.");
+  }
+
+  const mkdirResult = await runHostShell(
+    [
+      "set -e",
+      \`sudo mkdir -p \${workspaceRoot}\`,
+      \`sudo chown "$(id -u):$(id -g)" \${workspaceRoot}\`,
+    ].join("\\n"),
+    "/",
+  );
+  if (mkdirResult.exitCode !== 0) {
+    throw new Error(\`Failed to prepare ASH workspace: \${mkdirResult.stderr || mkdirResult.stdout || "unknown error"}\`);
+  }
+
+  await ensureBunAvailable(createHostSession("bootstrap"));
+
+  const repoPath = path.join(workspaceRoot, "repo");
+  if (await pathExists(repoPath)) {
+    await rm(repoPath, { force: true, recursive: true });
+  }
+  await symlink(projectRoot, repoPath, "dir");
+}
+
+function sliceTextByLines(text: string, options?: SandboxReadFileOptions): string {
+  if (!options?.startLine && !options?.endLine) {
+    return text;
+  }
+
+  const lines = text.split("\\n");
+  const start = Math.max((options.startLine || 1) - 1, 0);
+  const end = options.endLine && options.endLine > 0 ? options.endLine : lines.length;
+  return lines.slice(start, end).join("\\n");
+}
+
+function createHostSession(id: string): SandboxSession {
+  return {
+    id,
+    async readFile(filePath, options) {
+      try {
+        const content = await readFile(resolveWorkspacePath(filePath), "utf8");
+        return sliceTextByLines(content, options);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
+    },
+    async readFileBytes(filePath) {
+      try {
+        return await readFile(resolveWorkspacePath(filePath));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
+    },
+    resolvePath: resolveWorkspacePath,
+    runCommand: (command) => runHostShell(command),
+    async writeFile(filePath, content) {
+      const resolved = resolveWorkspacePath(filePath);
+      await mkdir(path.dirname(resolved), { recursive: true });
+      await writeFile(resolved, content);
+    },
+  };
+}
+
+function hostFilesystemBackend() {
+  return {
+    name: "dev3000-host-filesystem",
+    async create(input: {
+      bootstrap?: (session: SandboxSession) => Promise<void> | void;
+      sandboxName: string;
+      seedFiles?: () => Promise<readonly { content: string | Buffer; path: string }[]>;
+      sessionKey: string;
+    }) {
+      await prepareWorkspace();
+      const session = createHostSession(input.sessionKey);
+
+      if (input.bootstrap) {
+        await input.bootstrap(session);
+      }
+
+      const seedFiles = input.seedFiles ? await input.seedFiles() : [];
+      for (const file of seedFiles) {
+        await session.writeFile(file.path, file.content);
+      }
+
+      return {
+        session,
+        async captureState() {
+          return {
+            backendName: "dev3000-host-filesystem",
+            metadata: { workspaceRoot },
+            sandboxName: input.sandboxName,
+            sessionKey: input.sessionKey,
+          };
+        },
+        async dispose() {},
+      };
+    },
+  };
+}
+
 export default defineSandbox({
-  ...defaultSandbox,
-  async bootstrap({ sandbox }) {
-    const fallbackBootstrap = defaultSandbox.bootstrap;
-    if (typeof fallbackBootstrap === "function") {
-      await fallbackBootstrap({ sandbox });
-    }
-
-    await ensureBunAvailable(sandbox);
-  },
+  backend: hostFilesystemBackend(),
   async onSession({ sandbox }) {
-    const fallbackOnSession = defaultSandbox.onSession;
-    if (typeof fallbackOnSession === "function") {
-      await fallbackOnSession({ sandbox });
-    }
-
     await ensureBunAvailable(sandbox);
 
-    if (!projectRoot) {
-      return;
+    const repoCheck = await sandbox.runCommand("test -d /workspace/repo && test -f /workspace/repo/package.json");
+    if (repoCheck.exitCode !== 0) {
+      throw new Error("ASH sandbox workspace is missing /workspace/repo.");
     }
-
-    const repoLinkPath = sandbox.resolvePath("repo");
-    const escapedProjectRoot = JSON.stringify(projectRoot);
-    const escapedRepoLinkPath = JSON.stringify(repoLinkPath);
-
-    await sandbox.runCommand(
-      [
-        "mkdir -p /workspace",
-        "if [ -L " + escapedRepoLinkPath + " ] || [ -e " + escapedRepoLinkPath + " ]; then rm -rf " + escapedRepoLinkPath + "; fi",
-        "ln -s " + escapedProjectRoot + " " + escapedRepoLinkPath,
-      ].join(" && "),
-    );
   },
 });
 `
@@ -419,31 +584,64 @@ function renderGeneratedWorkspaceReadme(): string {
 }
 
 function renderWorkflowWorldLocalPatchScript(): string {
-  return `import { readFileSync, writeFileSync } from "node:fs";
+  return `import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
 const require = createRequire(import.meta.url);
 const worldEntry = require.resolve("@workflow/world");
 const runsPath = path.join(path.dirname(worldEntry), "runs.js");
-const source = readFileSync(runsPath, "utf8");
+const targets = [runsPath];
+
+const bundledLibsPath = path.join(process.cwd(), ".output", "server", "_libs");
+if (existsSync(bundledLibsPath)) {
+  const pending = [bundledLibsPath];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) continue;
+
+    for (const entry of readdirSync(current)) {
+      const next = path.join(current, entry);
+      const stat = statSync(next);
+      if (stat.isDirectory()) {
+        pending.push(next);
+      } else if (/\\.[cm]?js$/.test(entry)) {
+        targets.push(next);
+      }
+    }
+  }
+}
 
 // @workflow/world-local writes undefined run fields to JSON, which removes
 // the keys. The @workflow/world run schema must accept those absent keys.
-const patched = source.replace(
-  /(output|error|completedAt): z\\.undefined\\(\\)(?!\\.optional\\(\\)),/g,
-  "$1: z.undefined().optional(),",
-);
+let patchedCount = 0;
+let alreadyPatchedCount = 0;
 
-if (patched === source) {
-  if (/(output|error|completedAt): z\\.undefined\\(\\),/.test(source)) {
-    throw new Error("Failed to patch @workflow/world run schema.");
+for (const filePath of targets) {
+  const source = readFileSync(filePath, "utf8");
+  const patched = source.replace(
+    /(output|error|completedAt): z\\.undefined\\(\\)(?!\\.optional\\(\\)),/g,
+    "$1: z.undefined().optional(),",
+  );
+
+  if (patched !== source) {
+    writeFileSync(filePath, patched);
+    patchedCount += 1;
+    continue;
   }
 
+  if (/(output|error|completedAt): z\\.undefined\\(\\)\\.optional\\(\\),/.test(source)) {
+    alreadyPatchedCount += 1;
+  }
+}
+
+if (patchedCount === 0) {
+  if (alreadyPatchedCount === 0) {
+    throw new Error("Failed to patch @workflow/world run schema.");
+  }
   console.log("workflow world-local schema patch already applied");
 } else {
-  writeFileSync(runsPath, patched);
-  console.log("patched @workflow/world run schema for local workflow storage");
+  console.log(\`patched @workflow/world run schema in \${patchedCount} file(s)\`);
 }
 `
 }
