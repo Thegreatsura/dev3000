@@ -4988,7 +4988,17 @@ async function installPackagedAshAppInSandbox(
           'cd "$APP_ROOT"',
           '"$BUN_BIN" install --silent',
           '"$NODE24_BIN" scripts/patch-workflow-world-local.mjs',
-          "./node_modules/.bin/ash build",
+          [
+            "BUILD_STATUS=1",
+            "for BUILD_ATTEMPT in 1 2 3; do",
+            '  rm -rf "$APP_ROOT/.output"',
+            "  if ./node_modules/.bin/ash build; then BUILD_STATUS=0; break; fi",
+            '  echo "ash build failed on attempt $BUILD_ATTEMPT; retrying" >&2',
+            '  "$NODE24_BIN" scripts/patch-workflow-world-local.mjs || true',
+            "  sleep 2",
+            "done",
+            'if [ "$BUILD_STATUS" -ne 0 ]; then exit "$BUILD_STATUS"; fi'
+          ].join("\n"),
           '"$NODE24_BIN" scripts/patch-workflow-world-local.mjs',
           'printf "%s" "$APP_ROOT"'
         ].join("\n")
