@@ -5136,21 +5136,13 @@ async function readAshRuntimeSessionStream(
     totalTokens: number
   }
 }> {
+  const maxReconnectAttempts = 8
+  const reconnectDelayMs = 1000
   const resolvedStreamPath =
     typeof streamPath === "string" && streamPath.trim().length > 0
       ? streamPath.trim()
       : `/.well-known/ash/v1/sessions/${encodeURIComponent(sessionId)}/stream`
-  const streamResponse = await fetch(`${baseUrl}${resolvedStreamPath}`, {
-    headers: { authorization, "cache-control": "no-store" }
-  })
-  if (!streamResponse.ok || !streamResponse.body) {
-    const bodyText = await streamResponse.text()
-    throw new Error(`ASH runtime stream failed (${streamResponse.status}): ${bodyText}`)
-  }
 
-  const decoder = new TextDecoder()
-  const reader = streamResponse.body.getReader()
-  let buffer = ""
   let resultText = ""
   let lastCompletedMessage = ""
   let finalCompletedMessage = ""
@@ -5162,87 +5154,159 @@ async function readAshRuntimeSessionStream(
   let terminalError: string | null = null
   let terminalState: "waiting" | "completed" = "completed"
   let reachedTurnBoundary = false
+  let remainingReconnectAttempts = maxReconnectAttempts
 
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) {
-        break
+  const processEventLine = async (line: string) => {
+    rawEvents.push(line)
+    const event = JSON.parse(line) as {
+      type: string
+      data?: Record<string, unknown>
+    }
+
+    if (event.type === "message.completed") {
+      const message = typeof event.data?.message === "string" ? event.data.message.trim() : ""
+      if (message) {
+        lastCompletedMessage = message
+        if (event.data?.finishReason !== "tool-calls") {
+          finalCompletedMessage = message
+        }
+        await appendProgressLog(
+          progressContext,
+          `[ASH] Assistant message completed (${String(event.data?.finishReason || "unknown")}): ${message.slice(0, 160)}`
+        )
       }
+    }
 
-      buffer += decoder.decode(value, { stream: true })
-      while (true) {
-        const newlineIndex = buffer.indexOf("\n")
-        if (newlineIndex === -1) break
-        const line = buffer.slice(0, newlineIndex).trim()
-        buffer = buffer.slice(newlineIndex + 1)
-        if (!line) continue
-        rawEvents.push(line)
+    if (event.type === "step.completed") {
+      const usage = event.data?.usage as
+        | {
+            inputTokens?: number
+            outputTokens?: number
+            cacheReadTokens?: number
+            cacheWriteTokens?: number
+          }
+        | undefined
+      promptTokens += usage?.inputTokens ?? 0
+      completionTokens += usage?.outputTokens ?? 0
+      cacheReadTokens += usage?.cacheReadTokens ?? 0
+      cacheCreationTokens += usage?.cacheWriteTokens ?? 0
+    }
 
-        const event = JSON.parse(line) as {
-          type: string
-          data?: Record<string, unknown>
+    if (event.type === "input.requested") {
+      terminalError = "ASH runtime requested human input, which the workflow host does not support yet."
+      return
+    }
+
+    if (event.type === "step.failed" || event.type === "turn.failed" || event.type === "session.failed") {
+      terminalError =
+        typeof event.data?.message === "string" ? event.data.message : `ASH runtime failed during ${event.type}`
+      return
+    }
+
+    if (event.type === "session.waiting") {
+      terminalState = "waiting"
+      reachedTurnBoundary = true
+      return
+    }
+
+    if (event.type === "session.completed") {
+      terminalState = "completed"
+      reachedTurnBoundary = true
+    }
+  }
+
+  const reconnect = async (reason: string) => {
+    if (remainingReconnectAttempts <= 0) {
+      throw new Error(`ASH runtime stream disconnected before a turn boundary: ${reason}`)
+    }
+    remainingReconnectAttempts -= 1
+    await appendProgressLog(
+      progressContext,
+      `[ASH] Runtime stream disconnected; reconnecting from event ${rawEvents.length} (${reason})`
+    )
+    await new Promise((resolve) => setTimeout(resolve, reconnectDelayMs))
+  }
+
+  while (!terminalError && !reachedTurnBoundary) {
+    const streamUrl = new URL(resolvedStreamPath, baseUrl)
+    if (rawEvents.length > 0) {
+      streamUrl.searchParams.set("startIndex", String(rawEvents.length))
+    }
+
+    let streamResponse: Response
+    try {
+      streamResponse = await fetch(streamUrl, {
+        headers: { authorization, "cache-control": "no-store" }
+      })
+    } catch (error) {
+      if (isAshRuntimeStreamDisconnectError(error)) {
+        await reconnect(formatErrorMessage(error))
+        continue
+      }
+      throw error
+    }
+
+    if (!streamResponse.ok || !streamResponse.body) {
+      const bodyText = await streamResponse.text()
+      throw new Error(`ASH runtime stream failed (${streamResponse.status}): ${bodyText}`)
+    }
+
+    const decoder = new TextDecoder()
+    const reader = streamResponse.body.getReader()
+    let buffer = ""
+    let disconnected = false
+
+    while (true) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          const trailing = buffer.trim()
+          buffer = ""
+          if (trailing) {
+            await processEventLine(trailing)
+          }
+          break
         }
 
-        if (event.type === "message.completed") {
-          const message = typeof event.data?.message === "string" ? event.data.message.trim() : ""
-          if (message) {
-            lastCompletedMessage = message
-            if (event.data?.finishReason !== "tool-calls") {
-              finalCompletedMessage = message
-            }
-            await appendProgressLog(
-              progressContext,
-              `[ASH] Assistant message completed (${String(event.data?.finishReason || "unknown")}): ${message.slice(0, 160)}`
-            )
+        buffer += decoder.decode(value, { stream: true })
+        while (true) {
+          const newlineIndex = buffer.indexOf("\n")
+          if (newlineIndex === -1) break
+          const line = buffer.slice(0, newlineIndex).trim()
+          buffer = buffer.slice(newlineIndex + 1)
+          if (!line) continue
+          await processEventLine(line)
+          if (terminalError || reachedTurnBoundary) {
+            break
           }
         }
-
-        if (event.type === "step.completed") {
-          const usage = event.data?.usage as
-            | {
-                inputTokens?: number
-                outputTokens?: number
-                cacheReadTokens?: number
-                cacheWriteTokens?: number
-              }
-            | undefined
-          promptTokens += usage?.inputTokens ?? 0
-          completionTokens += usage?.outputTokens ?? 0
-          cacheReadTokens += usage?.cacheReadTokens ?? 0
-          cacheCreationTokens += usage?.cacheWriteTokens ?? 0
-        }
-
-        if (event.type === "input.requested") {
-          terminalError = "ASH runtime requested human input, which the workflow host does not support yet."
+      } catch (error) {
+        if (isAshRuntimeStreamDisconnectError(error)) {
+          disconnected = true
           break
         }
-
-        if (event.type === "step.failed" || event.type === "turn.failed" || event.type === "session.failed") {
-          terminalError =
-            typeof event.data?.message === "string" ? event.data.message : `ASH runtime failed during ${event.type}`
-          break
-        }
-
-        if (event.type === "session.waiting") {
-          terminalState = "waiting"
-          reachedTurnBoundary = true
-          break
-        }
-
-        if (event.type === "session.completed") {
-          terminalState = "completed"
-          reachedTurnBoundary = true
-          break
+        throw error
+      } finally {
+        if (terminalError || reachedTurnBoundary || disconnected) {
+          await reader.cancel().catch(() => {})
         }
       }
 
-      if (terminalError || reachedTurnBoundary) {
+      if (terminalError || reachedTurnBoundary || disconnected) {
         break
       }
     }
-  } finally {
-    await reader.cancel().catch(() => {})
+
+    if (terminalError || reachedTurnBoundary) {
+      break
+    }
+
+    if (disconnected) {
+      await reconnect("socket disconnected")
+      continue
+    }
+
+    await reconnect("stream ended before a turn boundary")
   }
 
   if (terminalError) {
@@ -5263,6 +5327,38 @@ async function readAshRuntimeSessionStream(
       totalTokens: promptTokens + completionTokens + cacheReadTokens + cacheCreationTokens
     }
   }
+}
+
+function isAshRuntimeStreamDisconnectError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === "AbortError"
+  }
+  if (!(error instanceof Error)) {
+    return false
+  }
+  const code =
+    "code" in error && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : undefined
+
+  return (
+    error.name === "AbortError" ||
+    error.message === "terminated" ||
+    error.message === "fetch failed" ||
+    code === "UND_ERR_SOCKET" ||
+    /abort|cancel|disconnect|premature close|socket|terminated/i.test(error.message)
+  )
+}
+
+function formatErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const code =
+      "code" in error && typeof (error as { code?: unknown }).code === "string"
+        ? ` ${(error as { code: string }).code}`
+        : ""
+    return `${error.message}${code}`
+  }
+  return String(error)
 }
 
 async function streamAshRuntimeTask(
@@ -7162,7 +7258,10 @@ async function runAgentWithDiagnoseTool(
     })
 
   if (gatewayAuthSource) {
-    await appendProgressLog(progressContext, `[Claude] Gateway auth source: ${gatewayAuthSource}`)
+    await appendProgressLog(
+      progressContext,
+      `[${devAgentAshTarballUrl ? "ASH" : "Claude"}] Gateway auth source: ${gatewayAuthSource}`
+    )
   }
 
   if (devAgentAshTarballUrl) {
