@@ -25,13 +25,12 @@ function encodeTarString(value: string, length: number): Buffer {
 function encodeTarOctal(value: number, length: number): Buffer {
   const buffer = Buffer.alloc(length, 0)
   const octal = value.toString(8)
-  const fieldWidth = length - 2
+  const fieldWidth = length - 1
   if (octal.length > fieldWidth) {
     throw new Error(`Tar octal field overflow: ${value}`)
   }
   buffer.write(octal.padStart(fieldWidth, "0"), 0, "ascii")
-  buffer[length - 2] = 0
-  buffer[length - 1] = 0x20
+  buffer[length - 1] = 0
   return buffer
 }
 
