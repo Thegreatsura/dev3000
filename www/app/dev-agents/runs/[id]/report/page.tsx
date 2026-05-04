@@ -177,8 +177,8 @@ function formatUsd(value?: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: value < 1 ? 3 : 2,
-    maximumFractionDigits: value < 1 ? 3 : 2
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   }).format(value)
 }
 
@@ -648,8 +648,11 @@ function getGeneratedReportCost(markdown: string): string | null {
     if (!match) continue
 
     const value = match[1].trim()
-    const costMatch = value.match(/~?\$[\d,]+(?:\.\d+)?/)
-    return costMatch?.[0] || value
+    const costMatch = value.match(/~?\$([\d,]+(?:\.\d+)?)/)
+    if (!costMatch) return value
+
+    const amount = Number(costMatch[1].replace(/,/g, ""))
+    return Number.isFinite(amount) ? formatUsd(amount) : costMatch[0].replace(/^~/, "")
   }
 
   return null
