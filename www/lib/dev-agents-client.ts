@@ -135,7 +135,13 @@ export interface DevAgent {
   updatedAt: string
   usageCount: number
   avgCost?: string
-  legacyWorkflowType?: "cls-fix" | "prompt" | "design-guidelines" | "react-performance" | "turbopack-bundle-analyzer"
+  legacyWorkflowType?:
+    | "cls-fix"
+    | "prompt"
+    | "design-guidelines"
+    | "react-performance"
+    | "turbopack-bundle-analyzer"
+    | "deepsec-security-scan"
   supportsPathInput?: boolean
   supportsPullRequest?: boolean
   supportsCrawlDepth?: boolean

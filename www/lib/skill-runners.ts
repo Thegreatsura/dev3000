@@ -8,9 +8,18 @@ import type {
   DevAgentSkillRef,
   DevAgentTeam
 } from "@/lib/dev-agents"
-import { D3K_SKILL_INSTALL_ARG, ensureDevAgentAshArtifactPrepared } from "@/lib/dev-agents"
+import {
+  D3K_SKILL_INSTALL_ARG,
+  DEEPSEC_DEV_AGENT_ACTION_STEPS,
+  DEEPSEC_DEV_AGENT_DESCRIPTION,
+  DEEPSEC_DEV_AGENT_INSTRUCTIONS,
+  DEEPSEC_DEV_AGENT_SUCCESS_EVAL,
+  DEEPSEC_SKILL_INSTALL_ARG,
+  ensureDevAgentAshArtifactPrepared
+} from "@/lib/dev-agents"
+import { NO_DEV_SERVER_COMMAND } from "@/lib/dev-server-command"
 import type { SkillRunnerTeamSettings } from "@/lib/skill-runner-config"
-import type { SkillsShSearchResult } from "@/lib/skills-sh"
+import type { SkillsShSearchResult, SkillsShSkillDetails } from "@/lib/skills-sh"
 import { fetchSkillsShSkillDetails, searchSkillsSh } from "@/lib/skills-sh"
 
 const SKILL_RUNNER_STATE_PREFIX = "skill-runners/teams/"
@@ -18,6 +27,7 @@ const SKILL_RUNNER_STATS_PREFIX = "skill-runners/stats/"
 
 type SkillRunnerValidationQuality = "high" | "variable"
 type SkillRunnerSourceKind = "default" | "imported"
+type SkillRunnerExecutionProfile = "generic" | "deepsec"
 
 export interface SkillRunnerRecord {
   id: string
@@ -38,6 +48,7 @@ export interface SkillRunnerRecord {
   updatedAt: string
   upstreamHash: string
   upstreamFetchedAt: string
+  executionProfile?: SkillRunnerExecutionProfile
   successEval?: string
   earlyExitEval?: string
   ashArtifact?: DevAgentAshArtifact
@@ -77,6 +88,7 @@ interface DefaultSkillRunnerSeed {
   description: string
   validationQuality: SkillRunnerValidationQuality
   validationWarning?: string
+  executionProfile?: SkillRunnerExecutionProfile
 }
 
 const SYSTEM_AUTHOR: DevAgentAuthor = {
@@ -119,6 +131,18 @@ const DEFAULT_SKILL_RUNNER_SEEDS: DefaultSkillRunnerSeed[] = [
     displayName: "Next Best Practices",
     description: "Apply Next.js architecture, routing, and rendering best practices in a concrete PR.",
     validationQuality: "high"
+  },
+  {
+    id: "deepsec",
+    canonicalPath: "vercel-labs/dev3000/deepsec",
+    sourceUrl: "https://skills.sh/vercel-labs/dev3000/deepsec",
+    installArg: DEEPSEC_SKILL_INSTALL_ARG,
+    packageName: "vercel-labs/dev3000",
+    skillName: "deepsec",
+    displayName: "DeepSec Security Scan",
+    description: DEEPSEC_DEV_AGENT_DESCRIPTION,
+    validationQuality: "high",
+    executionProfile: "deepsec"
   },
   {
     id: "sr_seo-audit",
@@ -277,6 +301,34 @@ function buildSkillRef(
   ]
 }
 
+function buildDeepsecSkillRef(
+  record: Pick<SkillRunnerRecord, "id" | "installArg" | "packageName" | "skillName" | "sourceUrl">
+): DevAgentSkillRef[] {
+  return [
+    {
+      id: record.id,
+      installArg: record.installArg,
+      packageName: record.packageName,
+      skillName: record.skillName,
+      displayName: "deepsec",
+      sourceUrl: record.sourceUrl
+    }
+  ]
+}
+
+function getExecutionProfile(
+  record: Pick<SkillRunnerRecord, "executionProfile" | "installArg" | "packageName" | "skillName">
+): SkillRunnerExecutionProfile {
+  if (record.executionProfile) return record.executionProfile
+  if (
+    record.installArg === DEEPSEC_SKILL_INSTALL_ARG ||
+    (record.packageName === "vercel-labs/dev3000" && record.skillName === "deepsec")
+  ) {
+    return "deepsec"
+  }
+  return "generic"
+}
+
 function toSkillRunnerRecord(seed: DefaultSkillRunnerSeed, team: DevAgentTeam): SkillRunnerRecord {
   const now = new Date().toISOString()
   return {
@@ -297,7 +349,8 @@ function toSkillRunnerRecord(seed: DefaultSkillRunnerSeed, team: DevAgentTeam): 
     createdAt: now,
     updatedAt: now,
     upstreamHash: "",
-    upstreamFetchedAt: now
+    upstreamFetchedAt: now,
+    executionProfile: seed.executionProfile
   }
 }
 
@@ -462,6 +515,38 @@ export async function listSkillRunnerTeamSettings(teams: DevAgentTeam[]): Promis
 
 function applyUsageCount(record: SkillRunnerRecord, usageMap: Map<string, SkillRunnerUsageSummary>): DevAgent {
   const usage = usageMap.get(record.id)
+
+  if (getExecutionProfile(record) === "deepsec") {
+    return {
+      id: record.id,
+      kind: "skill-runner",
+      name: record.displayName,
+      description: record.description,
+      instructions: `${DEEPSEC_DEV_AGENT_INSTRUCTIONS}\n\nUpstream skill: ${record.canonicalPath}`,
+      executionMode: "preview-pr",
+      sandboxBrowser: "none",
+      aiAgent: "anthropic/claude-opus-4.6",
+      devServerCommand: NO_DEV_SERVER_COMMAND,
+      actionSteps: DEEPSEC_DEV_AGENT_ACTION_STEPS,
+      skillRefs: buildDeepsecSkillRef(record),
+      author: record.author,
+      team: record.team,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      usageCount: usage?.usageCount ?? 0,
+      avgCost: formatAvgCost(usage),
+      legacyWorkflowType: "deepsec-security-scan",
+      supportsPathInput: false,
+      supportsPullRequest: true,
+      successEval: DEEPSEC_DEV_AGENT_SUCCESS_EVAL,
+      ashArtifact: record.ashArtifact,
+      runnerCanonicalPath: record.canonicalPath,
+      runnerSourceUrl: record.sourceUrl,
+      runnerSourceKind: record.sourceKind,
+      validationWarning: record.validationWarning
+    }
+  }
+
   return {
     id: record.id,
     kind: "skill-runner",
@@ -487,6 +572,42 @@ function applyUsageCount(record: SkillRunnerRecord, usageMap: Map<string, SkillR
     runnerSourceUrl: record.sourceUrl,
     runnerSourceKind: record.sourceKind,
     validationWarning: record.validationWarning
+  }
+}
+
+function buildFallbackDefaultSkillRunnerDetails(seed: DefaultSkillRunnerSeed): SkillsShSkillDetails {
+  const upstreamHash = createHash("sha256")
+    .update(
+      JSON.stringify({
+        canonicalPath: seed.canonicalPath,
+        sourceUrl: seed.sourceUrl,
+        installArg: seed.installArg,
+        displayName: seed.displayName,
+        description: seed.description
+      })
+    )
+    .digest("hex")
+
+  return {
+    canonicalPath: seed.canonicalPath,
+    installArg: seed.installArg,
+    packageName: seed.packageName,
+    skillName: seed.skillName,
+    displayName: seed.displayName,
+    sourceUrl: seed.sourceUrl,
+    description: seed.description,
+    upstreamHash
+  }
+}
+
+async function fetchDefaultSkillRunnerDetails(seed: DefaultSkillRunnerSeed): Promise<SkillsShSkillDetails> {
+  try {
+    return await fetchSkillsShSkillDetails(seed)
+  } catch (error) {
+    if (seed.executionProfile !== "deepsec") {
+      throw error
+    }
+    return buildFallbackDefaultSkillRunnerDetails(seed)
   }
 }
 
@@ -618,15 +739,16 @@ export async function getSkillRunnerForExecution(
   const defaultSeed = DEFAULT_SKILL_RUNNER_SEEDS.find((seed) => seed.id === runnerId)
 
   if (defaultSeed) {
-    const details = await fetchSkillsShSkillDetails(defaultSeed)
+    const details = await fetchDefaultSkillRunnerDetails(defaultSeed)
     const devAgent = applyUsageCount(
       {
         ...toSkillRunnerRecord(
           {
             ...defaultSeed,
             sourceUrl: details.sourceUrl,
-            displayName: details.displayName,
-            description: details.description
+            displayName: defaultSeed.executionProfile === "deepsec" ? defaultSeed.displayName : details.displayName,
+            description: defaultSeed.executionProfile === "deepsec" ? defaultSeed.description : details.description,
+            executionProfile: defaultSeed.executionProfile
           },
           team
         ),

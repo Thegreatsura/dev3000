@@ -2619,6 +2619,7 @@ export async function initSandboxStep(
 }> {
   const timer = new StepTimer()
   const isTurbopackBundleAnalyzer = progressContext?.workflowType === "turbopack-bundle-analyzer"
+  const isDeepsecSecurityScan = isDeepsecSecurityScanWorkflow(progressContext?.workflowType)
 
   workflowLog(`[Init] Creating sandbox for ${projectName}...`)
   await updateProgress(progressContext, 1, "Creating sandbox environment...")
@@ -2745,8 +2746,8 @@ export async function initSandboxStep(
         npmToken: effectiveNpmToken,
         sourceTarballUrl,
         sourceLabel,
-        // Turbopack workflows now require CWV verification, so browser/d3k setup cannot be skipped.
-        skipD3kSetup: false,
+        // Turbopack workflows require CWV verification, so browser/d3k setup cannot be skipped there.
+        skipD3kSetup: isDeepsecSecurityScan,
         onProgress: (message) => appendProgressLog(progressContext, `[Sandbox] ${message}`),
         projectDir: projectDir || "",
         devCommand: devAgentDevServerCommand,
@@ -2829,6 +2830,35 @@ export async function initSandboxStep(
     )
 
     // Turbopack workflow is analyzer-only; no d3k browser/CLS bootstrap required.
+    timer.end()
+    const timingData = timer.getData()
+    workflowLog(`[Init] ⏱️ TIMING BREAKDOWN (total: ${(timingData.totalMs / 1000).toFixed(1)}s)`)
+    for (const step of timingData.steps) {
+      const secs = (step.durationMs / 1000).toFixed(1)
+      const pct = ((step.durationMs / timingData.totalMs) * 100).toFixed(0)
+      workflowLog(`[Init]   ${step.name}: ${secs}s (${pct}%)`)
+    }
+
+    return {
+      sandboxId: sandboxResult.sandbox.sandboxId,
+      devUrl: sandboxResult.devUrl,
+      reportId,
+      beforeCls: null,
+      beforeGrade: null,
+      beforeScreenshots: [],
+      initD3kLogs: "",
+      timing: {
+        totalMs: timingData.totalMs,
+        sandboxCreation: sandboxResult.timing,
+        steps: timingData.steps
+      },
+      fromSnapshot: sandboxResult.fromSnapshot,
+      snapshotId: sandboxResult.snapshotId
+    }
+  }
+
+  if (isDeepsecSecurityScan) {
+    await updateProgress(progressContext, 1, "Sandbox ready for DeepSec scan", sandboxResult.devUrl)
     timer.end()
     const timingData = timer.getData()
     workflowLog(`[Init] ⏱️ TIMING BREAKDOWN (total: ${(timingData.totalMs / 1000).toFixed(1)}s)`)
@@ -3299,7 +3329,7 @@ export async function observeBaselineStep(
   progressContext?: ProgressContext | null
 ): Promise<ObserveResult> {
   const timer = new StepTimer()
-  const isTurbopackBundleAnalyzer = progressContext?.workflowType === "turbopack-bundle-analyzer"
+  const isCodeOnlyWorkflow = isCodeOnlyWorkflowType(progressContext?.workflowType)
 
   const vercelApiTokens = getVercelApiTokenCandidates(vercelOidcToken)
 
@@ -3370,6 +3400,7 @@ export async function observeBaselineStep(
           sourceLabel,
           projectDir: projectDir || "",
           devCommand: devAgentDevServerCommand,
+          skipD3kSetup: isCodeOnlyWorkflow,
           timeout: WORKFLOW_SANDBOX_TIMEOUT,
           debug: true,
           onProgress: (message) => appendProgressLog(progressContext, `[Sandbox] ${message}`)
@@ -3398,7 +3429,7 @@ export async function observeBaselineStep(
     progressContext,
     {
       devAgentAshTarballUrl,
-      includeD3k: !isTurbopackBundleAnalyzer
+      includeD3k: !isCodeOnlyWorkflow
     }
   )
 
@@ -3855,12 +3886,28 @@ function getAgentProgressLabels({ workflowType, devAgentName }: { workflowType?:
     }
   }
 
+  if (isDeepsecSecurityScanWorkflow(workflowType)) {
+    return {
+      analysis: "AI agent running DeepSec scan...",
+      verification: "DeepSec run finished, checking exported findings...",
+      report: () => "Generating DeepSec report..."
+    }
+  }
+
   const agentLabel = devAgentName?.trim() || "dev agent"
   return {
     analysis: `AI agent running ${agentLabel}...`,
     verification: "Agent finished, running post-fix verification...",
     report: () => "Generating report..."
   }
+}
+
+function isDeepsecSecurityScanWorkflow(workflowType?: string): boolean {
+  return workflowType === "deepsec-security-scan"
+}
+
+function isCodeOnlyWorkflowType(workflowType?: string): boolean {
+  return workflowType === "turbopack-bundle-analyzer" || isDeepsecSecurityScanWorkflow(workflowType)
 }
 
 export async function agentFixLoopStep(
@@ -3921,6 +3968,8 @@ export async function agentFixLoopStep(
 }> {
   const timer = new StepTimer()
   const isTurbopackBundleAnalyzer = progressContext?.workflowType === "turbopack-bundle-analyzer"
+  const isDeepsecSecurityScan = isDeepsecSecurityScanWorkflow(progressContext?.workflowType)
+  const isCodeOnlyWorkflow = isCodeOnlyWorkflowType(progressContext?.workflowType)
   const progressLabels = getAgentProgressLabels({
     workflowType: progressContext?.workflowType,
     devAgentName
@@ -3959,6 +4008,7 @@ export async function agentFixLoopStep(
           sourceLabel,
           projectDir: projectDir || "",
           devCommand: devAgentDevServerCommand,
+          skipD3kSetup: isDeepsecSecurityScan,
           timeout: WORKFLOW_SANDBOX_TIMEOUT,
           debug: true,
           onProgress: (message) => appendProgressLog(progressContext, `[Sandbox] ${message}`)
@@ -3994,7 +4044,7 @@ export async function agentFixLoopStep(
     try {
       await installDevAgentSkillsInSandbox(sandbox, effectiveProjectDir, devAgentSkillRefs, progressContext, {
         devAgentAshTarballUrl,
-        includeD3k: !isTurbopackBundleAnalyzer
+        includeD3k: !isCodeOnlyWorkflow
       })
     } catch (skillInstallError) {
       await appendProgressLog(
@@ -4048,7 +4098,7 @@ export async function agentFixLoopStep(
   let beforeClsForVerification: number | null
   let beforeGradeForVerification: "good" | "needs-improvement" | "poor" | null
 
-  if (isTurbopackBundleAnalyzer) {
+  if (isCodeOnlyWorkflow) {
     capturedBeforeWebVitals = {}
     beforeWebVitalsDiagnostics = undefined
     beforeClsForVerification = null
@@ -4134,7 +4184,7 @@ export async function agentFixLoopStep(
   let afterWebVitalsResult: import("@/types").WebVitals = {}
   let afterWebVitalsDiagnostics: string[] | undefined
 
-  if (!isTurbopackBundleAnalyzer) {
+  if (!isCodeOnlyWorkflow) {
     // Force a fresh page reload to capture new CLS measurement
     // The agent might not have called diagnose after its last change
     //
@@ -4283,8 +4333,10 @@ export async function agentFixLoopStep(
     }
   }
 
-  const afterD3kLogs = isTurbopackBundleAnalyzer
-    ? "(bundle analyzer workflow does not use d3k browser verification)"
+  const afterD3kLogs = isCodeOnlyWorkflow
+    ? isDeepsecSecurityScan
+      ? "(DeepSec workflow does not use d3k browser verification)"
+      : "(bundle analyzer workflow does not use d3k browser verification)"
     : finalCls.d3kLogs.replace(initD3kLogs, "").trim() || "(no new logs)"
   const combinedD3kLogs = `=== Step 1: Init (before agent) ===\n${initD3kLogs}\n\n=== Step 2: After agent fix ===\n${afterD3kLogs}`
 
@@ -4296,7 +4348,8 @@ export async function agentFixLoopStep(
       | "design-guidelines"
       | "react-performance"
       | "url-audit"
-      | "turbopack-bundle-analyzer") || "cls-fix"
+      | "turbopack-bundle-analyzer"
+      | "deepsec-security-scan") || "cls-fix"
 
   const effectiveBeforeClsScore = beforeClsForVerification ?? transcriptClsEvidence.beforeCls ?? null
   const effectiveBeforeClsGrade = beforeGradeForVerification ?? gradeClsValue(effectiveBeforeClsScore)
@@ -4309,11 +4362,13 @@ export async function agentFixLoopStep(
         hasChanges,
         bundleComparison: turbopackBundleComparison
       })
-    : determineClsStatus({
-        hasChanges,
-        beforeCls: effectiveBeforeClsScore,
-        afterCls: effectiveAfterClsScore
-      })
+    : isDeepsecSecurityScan
+      ? determineCodeOnlyStatus({ hasChanges })
+      : determineClsStatus({
+          hasChanges,
+          beforeCls: effectiveBeforeClsScore,
+          afterCls: effectiveAfterClsScore
+        })
 
   workflowLog(
     isTurbopackBundleAnalyzer
@@ -4335,13 +4390,13 @@ export async function agentFixLoopStep(
   // Merge with the beforeCls we got from init step if CDP didn't capture it
   const beforeWebVitals: import("@/types").WebVitals = { ...capturedBeforeWebVitals }
   const afterWebVitals: import("@/types").WebVitals = { ...afterWebVitalsResult }
-  if (!isTurbopackBundleAnalyzer && !beforeWebVitals.cls && effectiveBeforeClsScore !== null) {
+  if (!isCodeOnlyWorkflow && !beforeWebVitals.cls && effectiveBeforeClsScore !== null) {
     beforeWebVitals.cls = {
       value: effectiveBeforeClsScore,
       grade: effectiveBeforeClsGrade || "good"
     }
   }
-  if (!isTurbopackBundleAnalyzer && !afterWebVitals.cls && effectiveAfterClsScore !== null) {
+  if (!isCodeOnlyWorkflow && !afterWebVitals.cls && effectiveAfterClsScore !== null) {
     afterWebVitals.cls = {
       value: effectiveAfterClsScore,
       grade: effectiveAfterClsGrade || "good"
@@ -5100,6 +5155,11 @@ async function ensurePackagedAshRuntimeInSandbox(
         `export DEV3000_ASH_RUNTIME_PASSWORD=${shellEscape(runtimePassword)}`,
         `export DEV3000_PROJECT_ROOT=${shellEscape(projectRoot)}`,
         gatewayAuthToken ? `export VERCEL_OIDC_TOKEN=${shellEscape(gatewayAuthToken)}` : null,
+        gatewayAuthToken ? `export AI_GATEWAY_API_KEY=${shellEscape(gatewayAuthToken)}` : null,
+        gatewayAuthToken ? `export ANTHROPIC_AUTH_TOKEN=${shellEscape(gatewayAuthToken)}` : null,
+        gatewayAuthToken ? `export OPENAI_API_KEY=${shellEscape(gatewayAuthToken)}` : null,
+        gatewayAuthToken ? "export ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh" : null,
+        gatewayAuthToken ? "export OPENAI_BASE_URL=https://ai-gateway.vercel.sh/v1" : null,
         `export PORT=${ASH_RUNTIME_PORT}`,
         "export HOST=0.0.0.0",
         "export HOSTNAME=0.0.0.0",
@@ -5132,7 +5192,7 @@ function redactAshDiagnosticSecrets(value: string): string {
     .replace(/\b(Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]")
     .replace(/\b(authorization|Authorization)\s*[:=]\s*[^\s]+/g, "$1=[redacted]")
     .replace(
-      /\b(VERCEL_OIDC_TOKEN|AI_GATEWAY_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY)\s*[:=]\s*[^\s]+/g,
+      /\b(VERCEL_OIDC_TOKEN|AI_GATEWAY_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)\s*[:=]\s*[^\s]+/g,
       "$1=[redacted]"
     )
 }
@@ -5746,7 +5806,10 @@ async function runAshAgentInSandbox(
     progressContext
   )
   const workflowTypeForPrompt = workflowType || "cls-fix"
-  const includeD3kSkill = workflowTypeForPrompt !== "turbopack-bundle-analyzer" && workflowTypeForPrompt !== "cls-fix"
+  const includeD3kSkill =
+    workflowTypeForPrompt !== "turbopack-bundle-analyzer" &&
+    workflowTypeForPrompt !== "deepsec-security-scan" &&
+    workflowTypeForPrompt !== "cls-fix"
   const skillLoadInstructions = buildDevAgentSkillLoadInstructions(devAgentSkillRefs, {
     includeD3k: includeD3kSkill,
     includeAshRunbook: true
@@ -6204,6 +6267,7 @@ function getWorkflowExecutionMaxTurns(workflowType: string): number {
   if (workflowType === "react-performance") return 12
   if (workflowType === "design-guidelines") return 12
   if (workflowType === "prompt") return 10
+  if (workflowType === "deepsec-security-scan") return 16
   return 10
 }
 
@@ -6273,6 +6337,16 @@ function buildWorkflowSpecificExecutionGuidance({
     ]
       .filter(Boolean)
       .join("\n")
+  }
+
+  if (workflowType === "deepsec-security-scan") {
+    return [
+      "This is a code-only DeepSec workflow. Do not start a dev server or use browser/Web Vitals tooling.",
+      "Run DeepSec from the target project checkout and keep the durable setup under `.deepsec/`.",
+      "Use the environment-provided AI Gateway credentials. Do not write credentials into `.env.local` or tracked files.",
+      "Use the default bounded processing pass unless the user explicitly requested a full scan.",
+      "Export markdown findings or create a no-findings README so the run leaves a reviewable artifact."
+    ].join("\n")
   }
 
   if (workflowType === "design-guidelines") {
@@ -6799,6 +6873,10 @@ function determineTurbopackStatus({
     return "degraded"
   }
   return "unchanged"
+}
+
+function determineCodeOnlyStatus({ hasChanges }: { hasChanges: boolean }): "improved" | "no-changes" {
+  return hasChanges ? "improved" : "no-changes"
 }
 
 async function ensureClaudeCodeInstalledInSandbox(
@@ -7525,7 +7603,10 @@ async function runAgentWithDiagnoseTool(
 }> {
   const SANDBOX_CWD = projectDir ? `/vercel/sandbox/${projectDir.replace(/^\/+|\/+$/g, "")}` : "/vercel/sandbox"
   const workflowTypeForPrompt = workflowType || "cls-fix"
-  const includeD3kSkill = workflowTypeForPrompt !== "turbopack-bundle-analyzer" && workflowTypeForPrompt !== "cls-fix"
+  const includeD3kSkill =
+    workflowTypeForPrompt !== "turbopack-bundle-analyzer" &&
+    workflowTypeForPrompt !== "deepsec-security-scan" &&
+    workflowTypeForPrompt !== "cls-fix"
   const skillLoadInstructions = buildDevAgentSkillLoadInstructions(devAgentSkillRefs, {
     includeD3k: includeD3kSkill,
     includeAshRunbook: Boolean(devAgentAshTarballUrl)
@@ -8942,11 +9023,13 @@ export async function createPullRequestStep(
     const branchPrefix =
       workflowKind === "turbopack-bundle-analyzer"
         ? "turbopack-bundle"
-        : workflowKind === "react-performance"
-          ? "react-performance"
-          : workflowKind === "design-guidelines"
-            ? "design-guidelines"
-            : "cls-fix"
+        : workflowKind === "deepsec-security-scan"
+          ? "deepsec"
+          : workflowKind === "react-performance"
+            ? "react-performance"
+            : workflowKind === "design-guidelines"
+              ? "design-guidelines"
+              : "cls-fix"
     const branchName = `d3k/${branchPrefix}-${Date.now()}`
 
     // Configure git user (required for commits)
@@ -9007,11 +9090,17 @@ export async function createPullRequestStep(
 Automated Turbopack bundle optimization by d3k
 
 🤖 Generated with d3k (https://d3k.dev)`
-        : `fix: ${
-            typeof beforeCls === "number" && typeof afterCls === "number"
-              ? `CLS ${beforeCls.toFixed(3)} → ${afterCls.toFixed(3)}`
-              : "CLS improvements"
-          }
+        : effectiveWorkflowType === "deepsec-security-scan"
+          ? `chore(deepsec): add security scan findings
+
+Automated DeepSec security scan by d3k
+
+🤖 Generated with d3k (https://d3k.dev)`
+          : `fix: ${
+              typeof beforeCls === "number" && typeof afterCls === "number"
+                ? `CLS ${beforeCls.toFixed(3)} → ${afterCls.toFixed(3)}`
+                : "CLS improvements"
+            }
 
 Automated fix by d3k
 
@@ -9050,7 +9139,9 @@ Automated fix by d3k
     const prTitle =
       effectiveWorkflowType === "turbopack-bundle-analyzer"
         ? `perf(turbopack): optimize bundle size`
-        : `fix(cls): reduce layout shift (${beforeCls?.toFixed(3) || "?"} → ${afterCls?.toFixed(3) || "?"})`
+        : effectiveWorkflowType === "deepsec-security-scan"
+          ? "chore(deepsec): add security scan findings"
+          : `fix(cls): reduce layout shift (${beforeCls?.toFixed(3) || "?"} → ${afterCls?.toFixed(3) || "?"})`
 
     // Build visual comparison section if screenshots available
     let visualComparisonSection = ""
@@ -9101,7 +9192,9 @@ ${screenshotRows}
     const workflowHeading =
       effectiveWorkflowType === "turbopack-bundle-analyzer"
         ? "Turbopack Bundle Analyzer Improvements"
-        : "CLS Improvements"
+        : effectiveWorkflowType === "deepsec-security-scan"
+          ? "DeepSec Security Scan"
+          : "CLS Improvements"
     const resultsSection =
       effectiveWorkflowType === "turbopack-bundle-analyzer"
         ? `### Results
@@ -9109,7 +9202,12 @@ ${screenshotRows}
 |--------|-------|
 | Compressed JS | ${typeof turbos?.compressedBytes === "number" ? `${(turbos.compressedBytes / 1024).toFixed(1)} KB` : "unknown"} (${typeof turbos?.compressedPercent === "number" ? `${turbos.compressedPercent.toFixed(2)}%` : "unknown"}) |
 | Raw JS | ${typeof turbos?.rawBytes === "number" ? `${(turbos.rawBytes / 1024).toFixed(1)} KB` : "unknown"} (${typeof turbos?.rawPercent === "number" ? `${turbos.rawPercent.toFixed(2)}%` : "unknown"}) |`
-        : `### Results
+        : effectiveWorkflowType === "deepsec-security-scan"
+          ? `### Results
+- DeepSec was run from the project checkout.
+- Review exported markdown findings under \`.deepsec/findings\`.
+- See the workflow report for the command transcript and scan scope.`
+          : `### Results
 | Metric | Before | After |
 |--------|--------|-------|
 | CLS Score | ${beforeCls?.toFixed(3) || "unknown"} | ${afterCls?.toFixed(3) || "unknown"} |`

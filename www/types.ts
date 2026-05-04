@@ -73,6 +73,7 @@ export interface WorkflowReport {
     | "react-performance"
     | "url-audit"
     | "turbopack-bundle-analyzer"
+    | "deepsec-security-scan"
   customPrompt?: string // User's original prompt (for prompt workflows)
   systemPrompt?: string // The full system prompt used by the agent
   devAgentInstructions?: string

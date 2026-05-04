@@ -12,6 +12,14 @@ mcp-server/.next/*
 .cursor/
 .claude/
 .agents/
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/analyze-bundle/
+!.agents/skills/analyze-bundle/SKILL.md
+!.agents/skills/deepsec/
+!.agents/skills/deepsec/SKILL.md
 .mcp.json
 next-devtools-mcp/
 .vercel
@@ -29,4 +37,5 @@ mcp-server/next-env.d.ts
 # Large video files
 www/public/d3k-christmas-duet.mp4
 www/public/d3k-christmas-duet2.mp4
+www/deepsec/
 .blackboxcli/

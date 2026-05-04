@@ -30,6 +30,7 @@ next-env.d.ts
 .mcp.json
 .cursor/
 .agents/
+deepsec/
 opencode.json
 .env*.local
 .blackboxcli/

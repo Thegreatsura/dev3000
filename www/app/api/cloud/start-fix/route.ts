@@ -99,6 +99,7 @@ type WorkflowAuthSource =
   | "worker-platform-header-oidc"
   | "user-access-token"
   | "forwarded-user-token"
+  | "control-plane-ai-gateway-api-key"
   | "control-plane-runtime-oidc"
   | "control-plane-vercel-token"
   | "missing"
@@ -506,6 +507,7 @@ export async function POST(request: Request) {
     const isSelfHostedWorker = process.env[SKILL_RUNNER_WORKER_MODE_ENV] === "1"
     const runtimeOidcToken = process.env.VERCEL_OIDC_TOKEN?.trim() || undefined
     const headerOidcToken = request.headers.get("x-vercel-oidc-token")?.trim() || undefined
+    const controlPlaneAiGatewayApiKey = process.env.AI_GATEWAY_API_KEY?.trim() || undefined
     const fallbackVercelToken = process.env.VERCEL_TOKEN?.trim() || undefined
     const selfHostedProjectOidcRefreshToken = isSelfHostedWorker
       ? forwardedAccessToken || accessToken || fallbackVercelToken
@@ -539,18 +541,24 @@ export async function POST(request: Request) {
       : workerOidcAuth.token && workflowWorldToken === workerOidcAuth.token
         ? workerOidcAuth.source
         : "control-plane-vercel-token"
-    const gatewayAuthToken = isSelfHostedWorker ? workerOidcAuth.token : vercelApiToken
+    // Keep AI Gateway billing aligned with the execution host: hosted runs use
+    // the control-plane project, self-hosted skill-runners use the worker project.
+    const hostedGatewayAuthToken =
+      controlPlaneAiGatewayApiKey || runtimeOidcToken || fallbackVercelToken || vercelApiToken
+    const gatewayAuthToken = isSelfHostedWorker ? workerOidcAuth.token : hostedGatewayAuthToken
     const gatewayAuthSource: WorkflowAuthSource = !gatewayAuthToken
       ? "missing"
       : isSelfHostedWorker && workerOidcAuth.token && gatewayAuthToken === workerOidcAuth.token
         ? workerOidcAuth.source
-        : accessToken && gatewayAuthToken === accessToken
-          ? "user-access-token"
-          : forwardedAccessToken && gatewayAuthToken === forwardedAccessToken
-            ? "forwarded-user-token"
-            : runtimeOidcToken && gatewayAuthToken === runtimeOidcToken
-              ? "control-plane-runtime-oidc"
-              : "control-plane-vercel-token"
+        : !isSelfHostedWorker && controlPlaneAiGatewayApiKey && gatewayAuthToken === controlPlaneAiGatewayApiKey
+          ? "control-plane-ai-gateway-api-key"
+          : accessToken && gatewayAuthToken === accessToken
+            ? "user-access-token"
+            : forwardedAccessToken && gatewayAuthToken === forwardedAccessToken
+              ? "forwarded-user-token"
+              : runtimeOidcToken && gatewayAuthToken === runtimeOidcToken
+                ? "control-plane-runtime-oidc"
+                : "control-plane-vercel-token"
     if (isSelfHostedWorker && !workflowWorldToken) {
       throw new Error(
         "Self-hosted runner cannot start Workflow without a Vercel OIDC token. Enable Secure Backend Access with OIDC Federation on the runner project."
@@ -614,7 +622,8 @@ export async function POST(request: Request) {
       "design-guidelines",
       "react-performance",
       "url-audit",
-      "turbopack-bundle-analyzer"
+      "turbopack-bundle-analyzer",
+      "deepsec-security-scan"
     ]
     if (typeof body.skillRunnerId === "string" && body.skillRunnerId.trim().length > 0) {
       const requestedSkillRunnerId = body.skillRunnerId.trim()

@@ -315,6 +315,8 @@ export async function cloudFixWorkflow(params: {
   // The reportId is used for blob naming and tracking
   const reportId = runId || crypto.randomUUID()
   const isTurbopackBundleAnalyzer = workflowType === "turbopack-bundle-analyzer"
+  const isDeepsecSecurityScan = workflowType === "deepsec-security-scan"
+  const skipsBrowserObservation = isTurbopackBundleAnalyzer || isDeepsecSecurityScan
   const isSelfHostedWorker = process.env[SKILL_RUNNER_WORKER_MODE_ENV] === "1"
   const sandboxProjectId =
     isSelfHostedWorker && process.env.VERCEL_PROJECT_ID ? process.env.VERCEL_PROJECT_ID : projectId
@@ -453,7 +455,7 @@ export async function cloudFixWorkflow(params: {
     // STEP 1.5: Observe baseline — boot browser, capture metrics
     // ============================================================
     let observation: Awaited<ReturnType<typeof observeBaseline>> | null = null
-    if (analysisTargetType !== "url" && !isTurbopackBundleAnalyzer) {
+    if (analysisTargetType !== "url" && !skipsBrowserObservation) {
       workflowLog("[Workflow] Step 1.5: Observing baseline metrics...")
       observation = await observeBaseline(
         initResult.sandboxId,
@@ -490,7 +492,7 @@ export async function cloudFixWorkflow(params: {
     // STEP 1.6: Evaluate early exit (if earlyExitEval is defined)
     // ============================================================
     if (
-      !isTurbopackBundleAnalyzer &&
+      !skipsBrowserObservation &&
       observation &&
       (effectiveDevAgentEarlyExitMode === "structured"
         ? effectiveDevAgentEarlyExitRule
@@ -582,7 +584,9 @@ export async function cloudFixWorkflow(params: {
       workflowLog(
         isTurbopackBundleAnalyzer
           ? "[Workflow] Step 2: Agent optimizing Turbopack bundle..."
-          : "[Workflow] Step 2: Agent fixing CLS issues..."
+          : isDeepsecSecurityScan
+            ? "[Workflow] Step 2: Agent running DeepSec security scan..."
+            : "[Workflow] Step 2: Agent fixing CLS issues..."
       )
 
       fixResult = await agentFixLoop(
@@ -653,6 +657,7 @@ export async function cloudFixWorkflow(params: {
       analysisTargetType !== "url" &&
       fixResult.gitDiff &&
       productionUrl &&
+      !skipsBrowserObservation &&
       turbopackPrGate.allowPr &&
       submitPullRequest
     ) {
@@ -1250,7 +1255,8 @@ async function saveDoneStatus(
         | "design-guidelines"
         | "react-performance"
         | "url-audit"
-        | "turbopack-bundle-analyzer") ||
+        | "turbopack-bundle-analyzer"
+        | "deepsec-security-scan") ||
       existingRun?.type ||
       "cls-fix",
     runnerKind: progressContext.runnerKind ?? existingRun?.runnerKind,
@@ -1376,7 +1382,8 @@ async function saveFailureStatus(progressContext: ProgressContext, errorMessage:
           | "design-guidelines"
           | "react-performance"
           | "url-audit"
-          | "turbopack-bundle-analyzer") ||
+          | "turbopack-bundle-analyzer"
+          | "deepsec-security-scan") ||
         existingRun?.type ||
         "cls-fix",
       runnerKind: progressContext.runnerKind ?? existingRun?.runnerKind,

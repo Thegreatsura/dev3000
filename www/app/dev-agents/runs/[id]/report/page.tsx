@@ -507,6 +507,8 @@ function getWorkflowLabel(report: WorkflowReport, run: WorkflowRun): string {
       return "React Performance"
     case "turbopack-bundle-analyzer":
       return "Turbopack Bundle Analyzer"
+    case "deepsec-security-scan":
+      return "DeepSec Security Scan"
     case "url-audit":
       return "URL Audit"
     case "cls-fix":
@@ -540,6 +542,8 @@ function getWorkflowDescription(report: WorkflowReport, workflowLabel: string): 
       return "Read-only React performance analysis of the target URL."
     case "turbopack-bundle-analyzer":
       return "Bundle analysis with before/after metrics and optimization guidance."
+    case "deepsec-security-scan":
+      return "DeepSec security scan with project context and exported findings."
     case "url-audit":
       return "Read-only UX and performance analysis of the target URL."
     case "prompt":
@@ -772,6 +776,13 @@ function getOutcomeSummary(report: WorkflowReport, metricRows: MetricRow[]) {
     return {
       title: "Outcome Summary",
       description: `Compressed JS changed by ${formatSignedBytes(compressedDelta)} and raw JS changed by ${formatSignedBytes(rawDelta)} during this run.`
+    }
+  }
+
+  if (report.workflowType === "deepsec-security-scan") {
+    return {
+      title: "Outcome Summary",
+      description: "DeepSec completed a code-only scan flow. Review the exported findings and run transcript below."
     }
   }
 
@@ -1267,9 +1278,11 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
     url: skill.sourceUrl || skillLink(skill.displayName || skill.skillName || skill.id)
   }))
   const explicitSkills = [...(report.skillsLoaded || []), ...(report.skillsInstalled || [])]
-  const inferredSkills: string[] = workflowType === "turbopack-bundle-analyzer" ? [] : ["d3k"]
+  const inferredSkills: string[] =
+    workflowType === "turbopack-bundle-analyzer" || workflowType === "deepsec-security-scan" ? [] : ["d3k"]
   if (workflowType === "design-guidelines") inferredSkills.unshift("Vercel Web Design Guidelines")
   if (workflowType === "turbopack-bundle-analyzer") inferredSkills.unshift("analyze-bundle")
+  if (workflowType === "deepsec-security-scan") inferredSkills.unshift("deepsec")
   const skillsUsed = Array.from(
     new Map(
       [

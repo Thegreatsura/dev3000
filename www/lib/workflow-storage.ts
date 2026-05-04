@@ -12,6 +12,7 @@ export type WorkflowType =
   | "react-performance"
   | "url-audit"
   | "turbopack-bundle-analyzer"
+  | "deepsec-security-scan"
 
 export interface WorkflowRun {
   id: string

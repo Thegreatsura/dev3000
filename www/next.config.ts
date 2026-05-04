@@ -17,6 +17,9 @@ const nextConfig: NextConfig = {
     optimisticRouting: true
   },
   outputFileTracingRoot: path.join(currentDir, ".."),
+  outputFileTracingIncludes: {
+    "/*": ["../.agents/skills/**/*"]
+  },
   turbopack: {
     root: path.join(currentDir, "..")
   }

@@ -11,10 +11,12 @@ const BUILTIN_DEV_AGENT_ID_ALIASES = {
   "dev-agent-design-guidelines": "r_d91q7k",
   "dev-agent-react-performance": "r_p47n6x",
   "dev-agent-turbopack-bundle-analyzer": "r_t62v8m",
+  "dev-agent-deepsec-security-scan": "deepsec",
   "devAgent-cls-fix": "r_c84m2f",
   "devAgent-design-guidelines": "r_d91q7k",
   "devAgent-react-performance": "r_p47n6x",
-  "devAgent-turbopack-bundle-analyzer": "r_t62v8m"
+  "devAgent-turbopack-bundle-analyzer": "r_t62v8m",
+  "devAgent-deepsec-security-scan": "deepsec"
 } as const
 
 export type DevAgentKind = "builtin" | "custom" | "marketplace" | "skill-runner"
@@ -115,6 +117,8 @@ export type DevAgentEarlyExitOperator = "<" | "<=" | ">" | ">=" | "===" | "!==" 
 
 export const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
 export const ANALYZE_BUNDLE_SKILL_INSTALL_ARG = "vercel-labs/dev3000@analyze-bundle"
+export const DEEPSEC_SKILL_INSTALL_ARG = "vercel-labs/dev3000@deepsec"
+export const DEEPSEC_SKILL_SOURCE_URL = "https://github.com/vercel-labs/dev3000/tree/main/.agents/skills/deepsec"
 export const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const LEGACY_D3K_SKILL_INSTALL_ARGS = new Set([
   "https://github.com/vercel-labs/dev3000/tree/main/skills/d3k",
@@ -275,7 +279,13 @@ export interface DevAgent {
   updatedAt: string
   usageCount: number
   avgCost?: string
-  legacyWorkflowType?: "cls-fix" | "prompt" | "design-guidelines" | "react-performance" | "turbopack-bundle-analyzer"
+  legacyWorkflowType?:
+    | "cls-fix"
+    | "prompt"
+    | "design-guidelines"
+    | "react-performance"
+    | "turbopack-bundle-analyzer"
+    | "deepsec-security-scan"
   supportsPathInput?: boolean
   supportsPullRequest?: boolean
   supportsCrawlDepth?: boolean
@@ -418,6 +428,46 @@ const REACT_BEST_PRACTICES_SKILL_REFS = [
     sourceUrl: "https://skills.sh/vercel-labs/agent-skills/vercel-react-best-practices"
   })
 ]
+
+export const DEEPSEC_DEV_AGENT_DESCRIPTION =
+  "Install DeepSec, bootstrap project-specific context, run a bounded first-pass security scan, and export findings."
+
+export const DEEPSEC_DEV_AGENT_INSTRUCTIONS =
+  "Run DeepSec against the selected project checkout without starting a dev server. Initialize the .deepsec workspace if needed, install dependencies, fill INFO.md with concise project-specific security context, run the regex scan, process a bounded first pass with AI Gateway credentials from the environment, and export markdown findings. Do not write secrets to files. Do not run an unbounded DeepSec process unless run-specific instructions explicitly request a full scan."
+
+export const DEEPSEC_DEV_AGENT_ACTION_STEPS: DevAgentActionStep[] = [
+  {
+    kind: "send-prompt",
+    config: {
+      prompt:
+        "Inspect the project README, agent instructions, and representative security-sensitive files, then initialize .deepsec only if it does not already exist."
+    }
+  },
+  {
+    kind: "send-prompt",
+    config: {
+      prompt:
+        "Install the .deepsec workspace dependencies, read DeepSec's installed SKILL.md and SETUP.md, and replace INFO.md with concise project-specific context."
+    }
+  },
+  {
+    kind: "send-prompt",
+    config: {
+      prompt:
+        "Run `deepsec scan`, then run the default bounded AI processing pass: `deepsec process --limit 25 --concurrency 2 --batch-size 3` unless the user explicitly requested a full scan."
+    }
+  },
+  {
+    kind: "send-prompt",
+    config: {
+      prompt:
+        "Export findings as markdown, create a short findings README if no findings export, verify the git diff excludes secrets/raw scan state, and summarize commands, scope, findings, and next full-scan command."
+    }
+  }
+]
+
+export const DEEPSEC_DEV_AGENT_SUCCESS_EVAL =
+  "Was DeepSec initialized or reused correctly, was project-specific INFO.md context prepared, did scan and bounded AI processing run, and were findings or a no-findings summary exported without committing secrets or raw scan state?"
 
 const BUILTIN_DEV_AGENTS: Array<Omit<DevAgent, "usageCount">> = [
   {
@@ -791,6 +841,31 @@ const BUILTIN_DEV_AGENTS: Array<Omit<DevAgent, "usageCount">> = [
     aiAgent: "anthropic/claude-opus-4.6",
     devServerCommand: NO_DEV_SERVER_COMMAND,
     successEval: "Was the total shipped JavaScript measurably reduced?"
+  },
+  {
+    id: "deepsec",
+    kind: "builtin",
+    name: "DeepSec Security Scan",
+    description: DEEPSEC_DEV_AGENT_DESCRIPTION,
+    instructions: DEEPSEC_DEV_AGENT_INSTRUCTIONS,
+    executionMode: "preview-pr",
+    sandboxBrowser: "none",
+    actionSteps: DEEPSEC_DEV_AGENT_ACTION_STEPS,
+    skillRefs: [
+      parseDevAgentSkillRef({
+        installArg: DEEPSEC_SKILL_INSTALL_ARG,
+        displayName: "deepsec",
+        sourceUrl: DEEPSEC_SKILL_SOURCE_URL
+      })
+    ],
+    author: systemAuthor,
+    createdAt: "2026-05-04T00:00:00.000Z",
+    updatedAt: "2026-05-04T00:00:00.000Z",
+    legacyWorkflowType: "deepsec-security-scan",
+    supportsPullRequest: true,
+    aiAgent: "anthropic/claude-opus-4.6",
+    devServerCommand: NO_DEV_SERVER_COMMAND,
+    successEval: DEEPSEC_DEV_AGENT_SUCCESS_EVAL
   },
   // ── Marketplace agents (demo) ──────────────────────────────────────────
   {

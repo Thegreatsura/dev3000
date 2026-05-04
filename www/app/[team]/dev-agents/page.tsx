@@ -14,7 +14,8 @@ function getTeamAgentMockStats(devAgent: { id: string; usageCount: number }) {
     r_c84m2f: { avgTime: "7m", avgCost: "$3.40" },
     r_d91q7k: { avgTime: "3m", avgCost: "$1.10" },
     r_p47n6x: { avgTime: "5m", avgCost: "$2.80" },
-    r_t62v8m: { avgTime: "4m", avgCost: "$1.60" }
+    r_t62v8m: { avgTime: "4m", avgCost: "$1.60" },
+    deepsec: { avgTime: "15m", avgCost: "Varies" }
   }
 
   return (
