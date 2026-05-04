@@ -2433,6 +2433,7 @@ async function createD3kSandboxFromBaseSnapshot(
     await reportProgress("Restoring project source from Git...")
     const cloneScript = `
 set -euo pipefail
+cd /tmp
 sudo rm -rf /vercel/sandbox
 sudo mkdir -p /vercel
 sudo chown "$(id -u):$(id -g)" /vercel
