@@ -587,13 +587,19 @@ function getFinalSummaryMarkdown(agentAnalysis?: string) {
 function extractAshFinalMessage(agentAnalysis?: string): string {
   if (!agentAnalysis) return ""
 
-  const ndjsonMatch = agentAnalysis.match(/\*\*Stream Events:\*\*\s*```ndjson\s*([\s\S]*?)\s*```/)
-  const ndjson = ndjsonMatch?.[1]
-  if (!ndjson) return ""
+  const markerIndex = agentAnalysis.indexOf("**Stream Events:**")
+  if (markerIndex === -1) return ""
+
+  const fenceIndex = agentAnalysis.indexOf("```ndjson", markerIndex)
+  if (fenceIndex === -1) return ""
+
+  const ndjsonStart = agentAnalysis.indexOf("\n", fenceIndex)
+  if (ndjsonStart === -1) return ""
 
   let finalMessage = ""
-  for (const line of ndjson.split("\n")) {
+  for (const line of agentAnalysis.slice(ndjsonStart + 1).split("\n")) {
     const trimmed = line.trim()
+    if (trimmed === "```") break
     if (!trimmed) continue
 
     try {
