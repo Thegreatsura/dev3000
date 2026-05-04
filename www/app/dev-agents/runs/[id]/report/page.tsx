@@ -640,10 +640,11 @@ function stripGeneratedReportWebOnlySections(markdown: string): string {
   const lines = markdown.split("\n")
   const output: string[] = []
   let skippedHeadingLevel: number | null = null
+  const hiddenSectionHeadings = [/^Report Location$/i, /^Next Steps\s*[—–-]\s*Full Scan$/i]
 
   for (const line of lines) {
-    const headingMatch = line.match(/^(#{2,6})\s+Report Location\s*$/i)
-    if (headingMatch) {
+    const headingMatch = line.match(/^(#{2,6})\s+(.+?)\s*$/)
+    if (headingMatch && hiddenSectionHeadings.some((pattern) => pattern.test(headingMatch[2]))) {
       skippedHeadingLevel = headingMatch[1].length
       continue
     }

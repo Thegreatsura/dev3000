@@ -38,13 +38,15 @@ Use this skill to turn the manual DeepSec workflow into a repeatable dev3000 run
    - Run `corepack pnpm deepsec scan` from `.deepsec/`.
 6. Run bounded AI processing:
    - Default command: `corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3`.
-   - If the candidate set is tiny, processing fewer than 25 files is fine.
+   - If the candidate set is below the limit, state that all discovered candidates were processed.
    - If the user explicitly requested a full run, use the requested limit/concurrency or omit `--limit`.
 7. Generate the findings report:
    - Run `corepack pnpm deepsec export --format md-dir --out ./findings`.
    - If there are no findings, create `.deepsec/findings/README.md` summarizing that this bounded pass found no findings and include the exact commands that were run.
 8. Summarize the run:
-   - Include commands run, project id, limit/concurrency, whether the report contains findings, and the next command for a full scan.
+   - Include commands run, project id, limit/concurrency, and whether the report contains findings.
+   - Do not include a "Next Steps - Full Scan" section by default.
+   - Only include a follow-up scan section if DeepSec reports unprocessed candidates or the user explicitly asked about deeper coverage. Label it "Optional Deeper Follow-Up" and explain exactly how it differs from the completed run.
 
 ## Validation
 
