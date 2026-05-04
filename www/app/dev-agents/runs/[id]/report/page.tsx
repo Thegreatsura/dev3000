@@ -640,7 +640,7 @@ function stripGeneratedReportWebOnlySections(markdown: string): string {
   const lines = markdown.split("\n")
   const output: string[] = []
   let skippedHeadingLevel: number | null = null
-  const hiddenSectionHeadings = [/^Report Location$/i, /^Next Steps\s*[—–-]\s*Full Scan$/i]
+  const hiddenSectionHeadings = [/^Report Location$/i, /^Next Steps\s*[—–-]\s*Full Scan$/i, /^Git Safety$/i]
 
   for (const line of lines) {
     const headingMatch = line.match(/^(#{2,6})\s+(.+?)\s*$/)
@@ -1684,8 +1684,31 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
         </ReportSection>
       ) : null}
 
+      {workflowType === "deepsec-security-scan" && generatedReportMarkdown ? (
+        <GeneratedReportSection
+          title={generatedReportDisplay.title}
+          downloadUrl={generatedReportDownloadUrl}
+          downloadFilename={generatedReportFilename}
+        >
+          <AgentAnalysis
+            content={generatedReportDisplay.body}
+            controls={{
+              code: { copy: false, download: false },
+              table: { copy: true, download: false, fullscreen: false },
+              mermaid: { copy: true, download: false, fullscreen: false, panZoom: true }
+            }}
+            nowrapTableColumn={3}
+          />
+        </GeneratedReportSection>
+      ) : null}
+
       <ReportSection title="Run Context" description="Compact run metadata and environment details.">
         <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+          <SummaryItem
+            label="Cost"
+            value={typeof report.costUsd === "number" ? formatUsd(report.costUsd) : "Not reported"}
+            detail={typeof report.costUsd === "number" ? undefined : "No cost data recorded for this run"}
+          />
           {!isMarketplaceAgent ? <SummaryItem label="Model" value={report.agentAnalysisModel || "unknown"} /> : null}
           {!isMarketplaceAgent && report.devAgentRevision ? (
             <SummaryItem
@@ -1712,9 +1735,6 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
               label="Wall-clock time"
               value={formatDurationCompact(runEndedAt.getTime() - runStartedAt.getTime())}
             />
-          ) : null}
-          {typeof report.costUsd === "number" && report.costUsd > 0 ? (
-            <SummaryItem label="Cost" value={formatUsd(report.costUsd)} />
           ) : null}
           {report.targetUrl ? (
             <SummaryItem label="Target URL" value={report.targetUrl} mono href={report.targetUrl} />
@@ -1775,23 +1795,6 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
             {report.customPrompt}
           </div>
         </ReportSection>
-      ) : null}
-
-      {workflowType === "deepsec-security-scan" && generatedReportMarkdown ? (
-        <GeneratedReportSection
-          title={generatedReportDisplay.title}
-          downloadUrl={generatedReportDownloadUrl}
-          downloadFilename={generatedReportFilename}
-        >
-          <AgentAnalysis
-            content={generatedReportDisplay.body}
-            controls={{
-              code: { copy: false, download: false },
-              table: { copy: true, download: false, fullscreen: false },
-              mermaid: { copy: true, download: false, fullscreen: false, panZoom: true }
-            }}
-          />
-        </GeneratedReportSection>
       ) : null}
 
       {report.layoutShifts && report.layoutShifts.length > 0 ? (

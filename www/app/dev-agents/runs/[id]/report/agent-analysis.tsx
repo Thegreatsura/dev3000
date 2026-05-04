@@ -175,7 +175,15 @@ function getStepPhase(step: ParsedStep): TranscriptPhase {
   return "analysis"
 }
 
-export function AgentAnalysis({ content, controls }: { content: string; controls?: ControlsConfig }) {
+export function AgentAnalysis({
+  content,
+  controls,
+  nowrapTableColumn
+}: {
+  content: string
+  controls?: ControlsConfig
+  nowrapTableColumn?: number
+}) {
   const parsed = useMemo(() => parseTranscript(content), [content])
 
   // Strip "## Git Diff" section from finalOutput if present (we'll show it separately)
@@ -190,8 +198,16 @@ export function AgentAnalysis({ content, controls }: { content: string; controls
 
   const normalizedRawContent = useMemo(() => normalizeReportMarkdown(content), [content])
 
-  const analysisClassName =
-    "prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-ol:my-3 prose-ul:my-2 prose-li:my-1 [&_ol]:!list-outside [&_ul]:!list-outside [&_ol]:!pl-7 [&_ul]:!pl-7 [&_ol>li]:pl-0 [&_ul>li]:pl-0 [&_li>p]:inline [&_li>p]:my-0"
+  const nowrapTableColumnClassName =
+    nowrapTableColumn === 3
+      ? "[&_table_th:nth-child(3)]:whitespace-nowrap [&_table_td:nth-child(3)]:whitespace-nowrap [&_table_th:nth-child(3)]:text-left [&_table_td:nth-child(3)]:text-left [&_table_td:nth-child(3)]:align-top [&_table_td:nth-child(3)_code]:whitespace-nowrap [&_table_td:nth-child(3)_code]:bg-transparent [&_table_td:nth-child(3)_code]:px-0"
+      : ""
+  const analysisClassName = [
+    "prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-ol:my-3 prose-ul:my-2 prose-li:my-1 [&_ol]:!list-outside [&_ul]:!list-outside [&_ol]:!pl-7 [&_ul]:!pl-7 [&_ol>li]:pl-0 [&_ul>li]:pl-0 [&_li>p]:inline [&_li>p]:my-0",
+    nowrapTableColumnClassName
+  ]
+    .filter(Boolean)
+    .join(" ")
 
   const groupedSteps = useMemo(() => {
     const groups: Record<TranscriptPhase, ParsedStep[]> = {
