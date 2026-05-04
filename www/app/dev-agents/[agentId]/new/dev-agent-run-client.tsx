@@ -1,6 +1,6 @@
 "use client"
 
-import { AlertCircle, ArrowRight, CheckCircle2, ExternalLink, Loader2, Plus, Search, X } from "lucide-react"
+import { AlertCircle, ArrowRight, CheckCircle2, ExternalLink, Loader2, Plus, Search, Share2, X } from "lucide-react"
 import { usePathname, useSearchParams } from "next/navigation"
 import { useEffect, useId, useMemo, useState } from "react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -224,6 +224,7 @@ export default function DevAgentRunClient({
   const [workerSetupError, setWorkerSetupError] = useState<WorkerSetupErrorState | null>(null)
   const [workerSetupResult, setWorkerSetupResult] = useState<RunnerValidationResult | null>(null)
   const [didOpenWorkerSetupAction, setDidOpenWorkerSetupAction] = useState(false)
+  const [shareCopied, setShareCopied] = useState(false)
 
   const [repoVisibilities, setRepoVisibilities] = useState<Map<string, RepoVisibility>>(new Map())
 
@@ -264,9 +265,23 @@ export default function DevAgentRunClient({
   const runnerTitle = runnerKind === "skill-runner" ? "Skill Runner" : "Dev Agent"
   const displayedRunCount = runStats?.runCount ?? devAgent.usageCount
   const displayedAvgCost = runStats?.avgCost ?? devAgent.avgCost
+  const sharePath =
+    runnerKind === "skill-runner" && devAgent.runnerSourceKind === "default" ? `/skill-runner/${devAgent.id}` : null
   const isSelfHostedSkillRunner = runnerKind === "skill-runner" && localSkillRunnerExecutionMode === "self-hosted"
   const isReadySelfHostedSkillRunner =
     isSelfHostedSkillRunner && Boolean(localSkillRunnerWorkerBaseUrl) && localSkillRunnerWorkerStatus === "ready"
+
+  async function copyShareLink() {
+    if (!sharePath) return
+
+    try {
+      await navigator.clipboard.writeText(new URL(sharePath, window.location.origin).toString())
+      setShareCopied(true)
+      window.setTimeout(() => setShareCopied(false), 1800)
+    } catch {
+      setError("Could not copy the share link.")
+    }
+  }
 
   function normalizeSelfHostedStartError(message: string): string {
     if (/BLOB_READ_WRITE_TOKEN|Vercel Blob: No token found/i.test(message)) {
@@ -829,6 +844,18 @@ export default function DevAgentRunClient({
             <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-400">
               Previously Purchased
             </span>
+          ) : null}
+          {sharePath ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={copyShareLink}
+              className="ml-auto h-8 rounded-md border-[#333] bg-[#111] px-2.5 text-[13px] text-[#888] hover:bg-[#1a1a1a] hover:text-[#ededed]"
+            >
+              {shareCopied ? <CheckCircle2 className="size-3.5" /> : <Share2 className="size-3.5" />}
+              <span>{shareCopied ? "Copied" : "Share"}</span>
+            </Button>
           ) : null}
         </div>
 
