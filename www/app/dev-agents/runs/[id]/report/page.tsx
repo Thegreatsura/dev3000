@@ -663,9 +663,16 @@ function stripGeneratedReportWebOnlySections(markdown: string): string {
   return output.join("\n").trim()
 }
 
+function stripGeneratedReportCodeFenceLabels(markdown: string): string {
+  return markdown.replace(/^```[A-Za-z0-9_+.-]+[^\n]*$/gm, "```")
+}
+
 function extractLeadingReportHeading(markdown: string): { title: string; body: string } {
   const lines = markdown.split("\n")
-  const headingIndex = lines.findIndex((line) => line.trim().length > 0)
+  const headingIndex = lines.findIndex((line) => {
+    const trimmed = line.trim()
+    return trimmed.length > 0 && !/^[-*_]{3,}$/.test(trimmed)
+  })
   const headingMatch = headingIndex >= 0 ? lines[headingIndex].match(/^#{1,3}\s+(.+?)\s*$/) : null
 
   if (!headingMatch) {
@@ -675,10 +682,12 @@ function extractLeadingReportHeading(markdown: string): { title: string; body: s
     }
   }
 
-  const bodyLines = [...lines.slice(0, headingIndex), ...lines.slice(headingIndex + 1)]
   return {
     title: headingMatch[1],
-    body: bodyLines.join("\n").trim()
+    body: lines
+      .slice(headingIndex + 1)
+      .join("\n")
+      .trim()
   }
 }
 
@@ -1435,7 +1444,9 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
 function ReportContentBody({ run, report }: { run: WorkflowRun; report: WorkflowReport }) {
   const workflowType = report.workflowType || run.type || "cls-fix"
   const generatedReportMarkdown = getGeneratedReportMarkdown(report)
-  const generatedReportWebMarkdown = stripGeneratedReportWebOnlySections(generatedReportMarkdown)
+  const generatedReportWebMarkdown = stripGeneratedReportCodeFenceLabels(
+    stripGeneratedReportWebOnlySections(generatedReportMarkdown)
+  )
   const generatedReportDisplay = extractLeadingReportHeading(generatedReportWebMarkdown)
   const generatedReportDownloadUrl = generatedReportMarkdown
     ? `data:text/markdown;charset=utf-8,${encodeURIComponent(generatedReportMarkdown)}`
@@ -1775,7 +1786,7 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
           <AgentAnalysis
             content={generatedReportDisplay.body}
             controls={{
-              code: { copy: true, download: false },
+              code: { copy: false, download: false },
               table: { copy: true, download: false, fullscreen: false },
               mermaid: { copy: true, download: false, fullscreen: false, panZoom: true }
             }}
