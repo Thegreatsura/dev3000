@@ -179,12 +179,16 @@ export function AgentAnalysis({
   content,
   controls,
   nowrapTableColumn,
-  plainCodeBlocks = false
+  plainCodeBlocks = false,
+  compactLists = false,
+  topAlignTables = false
 }: {
   content: string
   controls?: ControlsConfig
   nowrapTableColumn?: number
   plainCodeBlocks?: boolean
+  compactLists?: boolean
+  topAlignTables?: boolean
 }) {
   const parsed = useMemo(() => parseTranscript(content), [content])
 
@@ -204,9 +208,15 @@ export function AgentAnalysis({
     nowrapTableColumn === 3
       ? "[&_table_th:nth-child(3)]:whitespace-nowrap [&_table_td:nth-child(3)]:whitespace-nowrap [&_table_th:nth-child(3)]:text-left [&_table_td:nth-child(3)]:text-left [&_table_td:nth-child(3)]:align-top [&_table_td:nth-child(3)_code]:whitespace-nowrap [&_table_td:nth-child(3)_code]:bg-transparent [&_table_td:nth-child(3)_code]:px-0"
       : ""
+  const listClassName = compactLists
+    ? "[&_ul]:!my-2 [&_ol]:!my-2 [&_ul]:!pl-0 [&_ol]:!pl-0 [&_li]:!list-none [&_li]:!pl-0 [&_li]:text-[0.95em] [&_li]:leading-relaxed [&_li>p]:inline [&_li>p]:my-0"
+    : "prose-ol:my-3 prose-ul:my-2 prose-li:my-1 [&_ol]:!list-outside [&_ul]:!list-outside [&_ol]:!pl-7 [&_ul]:!pl-7 [&_ol>li]:pl-0 [&_ul>li]:pl-0 [&_li>p]:inline [&_li>p]:my-0"
+  const topAlignTablesClassName = topAlignTables ? "[&_table_th]:align-top [&_table_td]:align-top" : ""
   const analysisClassName = [
-    "prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-ol:my-3 prose-ul:my-2 prose-li:my-1 [&_ol]:!list-outside [&_ul]:!list-outside [&_ol]:!pl-7 [&_ul]:!pl-7 [&_ol>li]:pl-0 [&_ul>li]:pl-0 [&_li>p]:inline [&_li>p]:my-0",
-    nowrapTableColumnClassName
+    "prose prose-sm dark:prose-invert max-w-none prose-p:my-2",
+    listClassName,
+    nowrapTableColumnClassName,
+    topAlignTablesClassName
   ]
     .filter(Boolean)
     .join(" ")

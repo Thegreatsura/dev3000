@@ -1693,6 +1693,8 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
             }}
             nowrapTableColumn={3}
             plainCodeBlocks
+            compactLists
+            topAlignTables
           />
         </GeneratedReportSection>
       ) : null}
