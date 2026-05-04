@@ -1,4 +1,5 @@
 import type { Metadata, Route } from "next"
+import Link from "next/link"
 import { notFound, redirect } from "next/navigation"
 import { connection } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
@@ -56,17 +57,72 @@ export async function generateMetadata({ params }: { params: Promise<{ runnerId:
 }
 
 export default async function ShareableSkillRunnerPage({ params }: { params: Promise<{ runnerId: string }> }) {
-  await connection()
   const { runnerId } = await params
   const profile = getDefaultSkillRunnerOpenGraphProfile(runnerId)
   if (!profile) {
     notFound()
   }
 
+  await connection()
   const sharePath = getSharePath(runnerId)
   const user = await getCurrentUser()
   if (!user) {
-    redirect(getAuthorizePath(sharePath))
+    return (
+      <main className="min-h-screen bg-[#050505] px-6 py-8 font-sans text-[#ededed]">
+        <div className="mx-auto flex min-h-[calc(100vh-64px)] max-w-5xl flex-col justify-between">
+          <header className="flex items-center justify-between text-[13px] text-[#888]">
+            <span>dev3000</span>
+            <span>{profile.canonicalPath}</span>
+          </header>
+
+          <section className="grid gap-10 py-14 lg:grid-cols-[1fr_360px] lg:items-center">
+            <div>
+              <div className="mb-5 inline-flex rounded-full border border-[#333] px-3 py-1 text-[13px] text-[#aaa]">
+                Skill Runner
+              </div>
+              <h1 className="max-w-3xl text-[52px] font-semibold leading-[0.98] tracking-normal text-[#f5f5f5] md:text-[72px]">
+                Run {profile.name} on your Vercel project
+              </h1>
+              <p className="mt-6 max-w-2xl text-[20px] leading-[1.45] text-[#aaa]">{profile.description}</p>
+              <div className="mt-8 flex flex-wrap items-center gap-3">
+                <Link
+                  href={getAuthorizePath(sharePath)}
+                  className="rounded-md bg-[#ededed] px-4 py-2.5 text-[15px] font-medium text-[#080808] hover:bg-white"
+                >
+                  Sign in with Vercel
+                </Link>
+                <span className="text-[13px] text-[#777]">You will land on your own team after sign-in.</span>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-[#262626] bg-[#0b0b0b] p-5">
+              <div className="font-mono text-[13px] leading-6 text-[#aaa]">
+                <div>
+                  <span className="text-[#666]">$</span> deepsec scan
+                </div>
+                <div>
+                  <span className="text-[#666]">scope</span> auth, api, env, actions
+                </div>
+                <div>
+                  <span className="text-[#666]">output</span> downloadable report
+                </div>
+              </div>
+              <div className="mt-5 rounded-md border border-[#333] bg-[#111] p-4">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#d5b16b]">
+                  Security scan
+                </div>
+                <div className="text-[18px] font-medium text-[#f5f5f5]">Prioritized findings from project context</div>
+                <p className="mt-2 text-[14px] leading-5 text-[#888]">
+                  Designed for teams that want a readable report before deciding what to fix.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <footer className="text-[12px] text-[#666]">Runs execute in the selected Vercel team context.</footer>
+        </div>
+      </main>
+    )
   }
 
   const defaultTeam = await getDefaultTeam()
