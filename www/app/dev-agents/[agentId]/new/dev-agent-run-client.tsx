@@ -20,7 +20,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import type { DevAgent, DevAgentTeam } from "@/lib/dev-agents-client"
-import type { SkillRunnerExecutionMode, SkillRunnerWorkerStatus } from "@/lib/skill-runner-config"
+import {
+  SKILL_RUNNER_WORKER_PROJECT_NAME,
+  type SkillRunnerExecutionMode,
+  type SkillRunnerWorkerStatus
+} from "@/lib/skill-runner-config"
 
 interface UserInfo {
   id: string
@@ -156,6 +160,10 @@ function formatExecutionMode(mode: DevAgent["executionMode"]): string {
   return mode === "dev-server" ? "Dev Server" : "Preview + PR"
 }
 
+function isSkillRunnerWorkerProject(project: Pick<Project, "name">): boolean {
+  return project.name === SKILL_RUNNER_WORKER_PROJECT_NAME
+}
+
 function DevAgentCriteriaSummary({ devAgent, hideEarlyExit = false }: { devAgent: DevAgent; hideEarlyExit?: boolean }) {
   const successEvalText = devAgent.successEval?.trim() || "None"
   const earlyExitText = devAgent.earlyExitEval?.trim() || "None"
@@ -230,11 +238,17 @@ export default function DevAgentRunClient({
 
   const selectedTeam = team
   const allProjects = useMemo(() => {
-    if (!selectedProjectFallback || projects.some((project) => project.id === selectedProjectFallback.id)) {
-      return projects
+    const selectableProjects =
+      runnerKind === "skill-runner" ? projects.filter((project) => !isSkillRunnerWorkerProject(project)) : projects
+    if (
+      !selectedProjectFallback ||
+      isSkillRunnerWorkerProject(selectedProjectFallback) ||
+      selectableProjects.some((project) => project.id === selectedProjectFallback.id)
+    ) {
+      return selectableProjects
     }
-    return [selectedProjectFallback, ...projects]
-  }, [projects, selectedProjectFallback])
+    return [selectedProjectFallback, ...selectableProjects]
+  }, [projects, runnerKind, selectedProjectFallback])
   const filteredProjects = useMemo(() => {
     const query = projectSearch.trim().toLowerCase()
     if (!query) return allProjects
@@ -478,7 +492,12 @@ export default function DevAgentRunClient({
           throw new Error(data.error || "Failed to load projects.")
         }
         if (controller.signal.aborted) return
-        setProjects(Array.isArray(data.projects) ? data.projects : [])
+        const nextProjects = Array.isArray(data.projects) ? (data.projects as Project[]) : []
+        setProjects(
+          runnerKind === "skill-runner"
+            ? nextProjects.filter((project) => !isSkillRunnerWorkerProject(project))
+            : nextProjects
+        )
       })
       .catch((loadError: unknown) => {
         if (controller.signal.aborted) return
@@ -491,7 +510,7 @@ export default function DevAgentRunClient({
       })
 
     return () => controller.abort()
-  }, [selectedTeamId, selectedTeamScope])
+  }, [runnerKind, selectedTeamId, selectedTeamScope])
 
   useEffect(() => {
     if (!selectedProjectId || !selectedTeamScope) {
@@ -516,7 +535,13 @@ export default function DevAgentRunClient({
           throw new Error(data.error || "Failed to load selected project.")
         }
         if (controller.signal.aborted) return
-        setSelectedProjectFallback(data.project as Project)
+        const fallbackProject = data.project as Project
+        if (runnerKind === "skill-runner" && isSkillRunnerWorkerProject(fallbackProject)) {
+          setSelectedProjectFallback(null)
+          setSelectedProjectId("")
+          return
+        }
+        setSelectedProjectFallback(fallbackProject)
         setError((currentError) => (currentError === "fetch failed" ? null : currentError))
       })
       .catch((loadError: unknown) => {
@@ -526,7 +551,7 @@ export default function DevAgentRunClient({
       })
 
     return () => controller.abort()
-  }, [projects, selectedProjectId, selectedTeamScope])
+  }, [projects, runnerKind, selectedProjectId, selectedTeamScope])
 
   // Batch-fetch repo visibility for all projects with GitHub links
   useEffect(() => {
@@ -692,11 +717,7 @@ export default function DevAgentRunClient({
     setError(null)
     setIsRunning(true)
 
-    const projectResponse = await fetch(
-      `/api/projects/${selectedProject.id}?teamId=${encodeURIComponent(selectedTeamScope || selectedTeam.id)}`
-    )
-    const projectData = await projectResponse.json()
-    const project = (projectData.success ? projectData.project : selectedProject) as Project
+    const project = selectedProject
     const latestDeployment = project.latestDeployments[0]
 
     if (!latestDeployment) {
