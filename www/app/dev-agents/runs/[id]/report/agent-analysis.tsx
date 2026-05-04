@@ -180,6 +180,7 @@ export function AgentAnalysis({
   controls,
   nowrapTableColumn,
   plainCodeBlocks = false,
+  plainTables = false,
   compactLists = false,
   topAlignTables = false
 }: {
@@ -187,6 +188,7 @@ export function AgentAnalysis({
   controls?: ControlsConfig
   nowrapTableColumn?: number
   plainCodeBlocks?: boolean
+  plainTables?: boolean
   compactLists?: boolean
   topAlignTables?: boolean
 }) {
@@ -221,10 +223,12 @@ export function AgentAnalysis({
     .filter(Boolean)
     .join(" ")
   const markdownComponents = useMemo<Components | undefined>(() => {
-    if (!plainCodeBlocks) return undefined
+    if (!plainCodeBlocks && !plainTables) return undefined
 
-    return {
-      code({ children, className, node: _node, ...props }) {
+    const components: Components = {}
+
+    if (plainCodeBlocks) {
+      components.code = function PlainCode({ children, className, node: _node, ...props }) {
         const isBlock = "data-block" in props
 
         if (!isBlock) {
@@ -242,7 +246,23 @@ export function AgentAnalysis({
         )
       }
     }
-  }, [plainCodeBlocks])
+
+    if (plainTables) {
+      components.table = function PlainTable({ children, className, node: _node, ...props }) {
+        const tableClassName = ["w-full divide-y divide-border", className].filter(Boolean).join(" ")
+
+        return (
+          <div className="my-4 overflow-x-auto rounded-md border border-border bg-background">
+            <table className={tableClassName} data-streamdown="table" {...props}>
+              {children}
+            </table>
+          </div>
+        )
+      }
+    }
+
+    return components
+  }, [plainCodeBlocks, plainTables])
 
   const groupedSteps = useMemo(() => {
     const groups: Record<TranscriptPhase, ParsedStep[]> = {

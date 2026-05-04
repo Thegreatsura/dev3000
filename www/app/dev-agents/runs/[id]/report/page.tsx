@@ -1776,11 +1776,12 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
             content={generatedReportBody}
             controls={{
               code: { copy: false, download: false },
-              table: { copy: true, download: false, fullscreen: false },
+              table: false,
               mermaid: { copy: true, download: false, fullscreen: false, panZoom: true }
             }}
             nowrapTableColumn={3}
             plainCodeBlocks
+            plainTables
             compactLists
             topAlignTables
           />
