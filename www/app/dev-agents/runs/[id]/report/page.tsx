@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Download, ExternalLink, ShieldCheck } from "lucide-react"
+import { AlertCircle, CheckCircle2, ChevronRight, Download, ExternalLink, ShieldCheck } from "lucide-react"
 import type { Metadata } from "next"
 import Image from "next/image"
 import { redirect } from "next/navigation"
@@ -636,6 +636,32 @@ function getGeneratedReportMarkdown(report: WorkflowReport): string {
   return ""
 }
 
+function stripGeneratedReportWebOnlySections(markdown: string): string {
+  const lines = markdown.split("\n")
+  const output: string[] = []
+  let skippedHeadingLevel: number | null = null
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^(#{2,6})\s+Report Location\s*$/i)
+    if (headingMatch) {
+      skippedHeadingLevel = headingMatch[1].length
+      continue
+    }
+
+    if (skippedHeadingLevel !== null) {
+      const nextHeadingMatch = line.match(/^(#{2,6})\s+/)
+      if (!nextHeadingMatch || nextHeadingMatch[1].length > skippedHeadingLevel) {
+        continue
+      }
+      skippedHeadingLevel = null
+    }
+
+    output.push(line)
+  }
+
+  return output.join("\n").trim()
+}
+
 function slugifyFilenamePart(value: string): string {
   return (
     value
@@ -1011,6 +1037,10 @@ function ReportSection({ title, description, children }: { title: string; descri
   )
 }
 
+function GeneratedReportSection({ children }: { children: ReactNode }) {
+  return <section className="rounded-lg border border-border bg-card p-6">{children}</section>
+}
+
 function MetricGradeBadge({ grade }: { grade?: MetricSnapshot["grade"] }) {
   const label = formatGrade(grade)
   if (!label) return null
@@ -1355,6 +1385,7 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
 function ReportContentBody({ run, report }: { run: WorkflowRun; report: WorkflowReport }) {
   const workflowType = report.workflowType || run.type || "cls-fix"
   const generatedReportMarkdown = getGeneratedReportMarkdown(report)
+  const generatedReportWebMarkdown = stripGeneratedReportWebOnlySections(generatedReportMarkdown)
   const effectiveSuccessEvalResult =
     workflowType === "deepsec-security-scan" && generatedReportMarkdown ? true : report.successEvalResult
   const successEvalText =
@@ -1681,9 +1712,16 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
       ) : null}
 
       {workflowType === "deepsec-security-scan" && generatedReportMarkdown ? (
-        <ReportSection title="DeepSec Report" description="Generated report from this code-only DeepSec run.">
-          <AgentAnalysis content={generatedReportMarkdown} />
-        </ReportSection>
+        <GeneratedReportSection>
+          <AgentAnalysis
+            content={generatedReportWebMarkdown}
+            controls={{
+              code: { copy: true, download: false },
+              table: { copy: true, download: false, fullscreen: true },
+              mermaid: { copy: true, download: false, fullscreen: true, panZoom: true }
+            }}
+          />
+        </GeneratedReportSection>
       ) : null}
 
       {report.layoutShifts && report.layoutShifts.length > 0 ? (
@@ -1861,10 +1899,16 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
       ) : null}
 
       {progressLogs.length > 0 || run.sandboxUrl || typeof normalizedStepNumber === "number" || run.currentStep ? (
-        <ReportSection title="Progress" description="Workflow step context and logs preserved from the running report.">
+        <section className="rounded-lg border border-border/70 bg-card/40 p-4">
           <details className="group">
-            <summary className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-              <span className="inline-flex items-center gap-2 font-medium">Show progress</span>
+            <summary className="flex cursor-pointer list-none items-start gap-3 text-left [&::-webkit-details-marker]:hidden">
+              <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+              <span className="min-w-0">
+                <span className="block text-base font-semibold text-foreground">Debug Logs</span>
+                <span className="mt-1 block text-sm text-muted-foreground">
+                  Optional workflow diagnostics and preserved execution logs.
+                </span>
+              </span>
             </summary>
             <div className="mt-4 space-y-4">
               {run.sandboxUrl ? (
@@ -1913,7 +1957,7 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
               ) : null}
             </div>
           </details>
-        </ReportSection>
+        </section>
       ) : null}
 
       <div className="flex flex-wrap gap-3">

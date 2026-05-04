@@ -2,7 +2,7 @@
 
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { type ReactNode, useMemo, useState } from "react"
-import { Streamdown } from "streamdown"
+import { type ControlsConfig, Streamdown } from "streamdown"
 
 interface ParsedStep {
   stepNumber: number
@@ -175,7 +175,7 @@ function getStepPhase(step: ParsedStep): TranscriptPhase {
   return "analysis"
 }
 
-export function AgentAnalysis({ content }: { content: string }) {
+export function AgentAnalysis({ content, controls }: { content: string; controls?: ControlsConfig }) {
   const parsed = useMemo(() => parseTranscript(content), [content])
 
   // Strip "## Git Diff" section from finalOutput if present (we'll show it separately)
@@ -217,7 +217,9 @@ export function AgentAnalysis({ content }: { content: string }) {
   if (!parsed.finalOutput && parsed.steps.length === 0) {
     return (
       <div className={analysisClassName}>
-        <Streamdown mode="static">{normalizedRawContent}</Streamdown>
+        <Streamdown controls={controls} mode="static">
+          {normalizedRawContent}
+        </Streamdown>
       </div>
     )
   }
@@ -227,7 +229,9 @@ export function AgentAnalysis({ content }: { content: string }) {
       {/* Final Output - shown prominently at the top (with Git Diff section stripped) */}
       {cleanedFinalOutput && (
         <div className={analysisClassName}>
-          <Streamdown mode="static">{cleanedFinalOutput}</Streamdown>
+          <Streamdown controls={controls} mode="static">
+            {cleanedFinalOutput}
+          </Streamdown>
         </div>
       )}
 
@@ -256,7 +260,9 @@ export function AgentAnalysis({ content }: { content: string }) {
                           <div>
                             <div className="text-xs font-medium text-muted-foreground mb-1">Assistant</div>
                             <div className={analysisClassName}>
-                              <Streamdown mode="static">{normalizeReportMarkdown(step.assistantText)}</Streamdown>
+                              <Streamdown controls={controls} mode="static">
+                                {normalizeReportMarkdown(step.assistantText)}
+                              </Streamdown>
                             </div>
                           </div>
                         )}
