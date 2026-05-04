@@ -2,18 +2,6 @@ import { ImageResponse } from "next/og"
 import type { CSSProperties } from "react"
 import { getDefaultSkillRunnerOpenGraphProfile } from "@/lib/skill-runners"
 
-const deepsecHighlights = [
-  "Scan code paths that handle auth, secrets, input, and third-party APIs",
-  "Turn findings into a readable security report",
-  "Run it directly against a Vercel project"
-]
-
-const genericHighlights = [
-  "Choose a Vercel project",
-  "Run a focused AI skill in an isolated runner",
-  "Review the generated report and artifacts"
-]
-
 export async function GET(_request: Request, { params }: { params: Promise<{ runnerId: string }> }) {
   const { runnerId } = await params
   const profile = getDefaultSkillRunnerOpenGraphProfile(runnerId)
@@ -23,7 +11,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ run
     ? "Find security issues in your Vercel project before they reach production."
     : profile?.description || "Run a high-confidence AI skill against your Vercel project."
   const eyebrow = isDeepsec ? "DeepSec on dev3000" : "dev3000 skill runner"
-  const highlights = isDeepsec ? deepsecHighlights : genericHighlights
 
   return new ImageResponse(
     <div
@@ -49,28 +36,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ run
           background: "linear-gradient(135deg, #050505 0%, #0d1112 48%, #14100c 100%)"
         }}
       />
-      <div style={scanPanelStyle}>
-        <div style={terminalBarStyle}>
-          <span style={dotStyle} />
-          <span style={dotStyle} />
-          <span style={dotStyle} />
-        </div>
-        <div style={codeLineStyle}>
-          <span style={mutedCodeStyle}>$</span> deepsec scan
-        </div>
-        <div style={codeLineStyle}>
-          <span style={mutedCodeStyle}>scope</span> auth, actions, api, env
-        </div>
-        <div style={codeLineStyle}>
-          <span style={mutedCodeStyle}>result</span> prioritized findings
-        </div>
-        <div style={findingCardStyle}>
-          <div style={severityStyle}>MEDIUM</div>
-          <div style={findingTitleStyle}>Potential secret exposure path</div>
-          <div style={findingBodyStyle}>Actionable report generated from project context.</div>
-        </div>
-      </div>
-
       <main
         style={{
           position: "relative",
@@ -80,19 +45,15 @@ export async function GET(_request: Request, { params }: { params: Promise<{ run
           width: "100%"
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column" }}>
+        <div style={copyColumnStyle}>
           <div style={eyebrowStyle}>{eyebrow}</div>
           <div style={titleStyle}>{title}</div>
           <div style={subtitleStyle}>{subtitle}</div>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {highlights.map((item) => (
-            <div key={item} style={highlightStyle}>
-              <span style={checkStyle}>OK</span>
-              <span>{item}</span>
-            </div>
-          ))}
+          <div style={summaryRowStyle}>
+            <span style={summaryPillStyle}>Auth</span>
+            <span style={summaryPillStyle}>Secrets</span>
+            <span style={summaryPillStyle}>APIs</span>
+          </div>
         </div>
 
         <div style={footerStyle}>
@@ -100,12 +61,34 @@ export async function GET(_request: Request, { params }: { params: Promise<{ run
           <div style={brandStyle}>dev3000.ai</div>
         </div>
       </main>
+
+      <div style={scanPanelStyle}>
+        <div style={terminalBarStyle}>
+          <span style={dotStyle} />
+          <span style={dotStyle} />
+          <span style={dotStyle} />
+        </div>
+        <div style={codeLineStyle}>
+          <span style={mutedCodeStyle}>$</span> deepsec scan
+        </div>
+        <div style={findingCardStyle}>
+          <div style={severityStyle}>Security report</div>
+          <div style={findingTitleStyle}>Prioritized findings for your Vercel project</div>
+          <div style={findingBodyStyle}>Generated from project context and ready to download.</div>
+        </div>
+      </div>
     </div>,
     {
       width: 1200,
       height: 630
     }
   )
+}
+
+const copyColumnStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  maxWidth: 680
 }
 
 const eyebrowStyle: CSSProperties = {
@@ -135,25 +118,23 @@ const subtitleStyle: CSSProperties = {
   maxWidth: 710
 }
 
-const highlightStyle: CSSProperties = {
+const summaryRowStyle: CSSProperties = {
   display: "flex",
-  alignItems: "center",
-  gap: 14,
-  fontSize: 27,
-  color: "#eeeeee"
+  gap: 12,
+  marginTop: 38
 }
 
-const checkStyle: CSSProperties = {
+const summaryPillStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 34,
-  height: 34,
-  borderRadius: 8,
-  background: "#123626",
-  color: "#78e6ae",
-  fontSize: 16,
-  fontWeight: 800
+  border: "1px solid #2d2d2d",
+  borderRadius: 999,
+  background: "#101010",
+  color: "#d7d7d7",
+  padding: "9px 15px",
+  fontSize: 24,
+  fontWeight: 650
 }
 
 const footerStyle: CSSProperties = {
@@ -179,10 +160,10 @@ const brandStyle: CSSProperties = {
 
 const scanPanelStyle: CSSProperties = {
   position: "absolute",
-  right: 52,
-  top: 52,
-  width: 395,
-  height: 526,
+  right: 64,
+  top: 72,
+  width: 390,
+  height: 430,
   border: "1px solid #303030",
   borderRadius: 18,
   background: "#090909",
@@ -218,35 +199,35 @@ const mutedCodeStyle: CSSProperties = {
 }
 
 const findingCardStyle: CSSProperties = {
-  marginTop: 26,
+  marginTop: 42,
   border: "1px solid #353535",
   borderRadius: 14,
   background: "#111",
-  padding: 20,
+  padding: 24,
   display: "flex",
   flexDirection: "column",
-  gap: 12
+  gap: 16
 }
 
 const severityStyle: CSSProperties = {
   display: "flex",
   border: "1px solid #6b4b21",
   borderRadius: 8,
-  padding: "5px 9px",
+  padding: "6px 10px",
   color: "#f2c572",
-  fontSize: 18,
+  fontSize: 19,
   fontWeight: 760
 }
 
 const findingTitleStyle: CSSProperties = {
   color: "#f5f5f5",
-  fontSize: 27,
-  lineHeight: 1.12,
+  fontSize: 29,
+  lineHeight: 1.16,
   fontWeight: 720
 }
 
 const findingBodyStyle: CSSProperties = {
   color: "#a7a7a7",
-  fontSize: 23,
-  lineHeight: 1.24
+  fontSize: 24,
+  lineHeight: 1.28
 }
