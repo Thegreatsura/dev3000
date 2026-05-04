@@ -1,6 +1,6 @@
 ---
 name: deepsec
-description: Run DeepSec against a Vercel project checkout from dev3000. Use for one-click DeepSec setup, project context bootstrapping, bounded first-pass processing, and findings export.
+description: Run DeepSec against a Vercel project checkout from dev3000. Use for one-click DeepSec setup, project context bootstrapping, bounded first-pass processing, and report generation.
 ---
 
 # DeepSec Dev3000 Runbook
@@ -12,7 +12,7 @@ Use this skill to turn the manual DeepSec workflow into a repeatable dev3000 run
 - Work from the real project checkout at `/workspace/repo`.
 - Do not write AI credentials into `.deepsec/.env.local` or any tracked file. The dev3000 runtime passes AI Gateway credentials through the process environment.
 - Default dev3000 runs are a bounded first pass. Do not run an unbounded `process` or `revalidate` command unless the user explicitly asks for a full DeepSec scan in run-specific instructions.
-- Keep generated scan state in the locations DeepSec already gitignores. Commit only the durable setup/context files and exported human-readable findings.
+- Keep generated scan state in the locations DeepSec already gitignores. Commit only the durable setup/context files and human-readable findings report.
 - Treat DeepSec as a coding agent with shell access. Do not run it on untrusted source inputs.
 
 ## Default Flow
@@ -40,14 +40,14 @@ Use this skill to turn the manual DeepSec workflow into a repeatable dev3000 run
    - Default command: `corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3`.
    - If the candidate set is tiny, processing fewer than 25 files is fine.
    - If the user explicitly requested a full run, use the requested limit/concurrency or omit `--limit`.
-7. Export findings:
+7. Generate the findings report:
    - Run `corepack pnpm deepsec export --format md-dir --out ./findings`.
-   - If there are no exported findings, create `.deepsec/findings/README.md` summarizing that this bounded pass found no exported findings and include the exact commands that were run.
+   - If there are no findings, create `.deepsec/findings/README.md` summarizing that this bounded pass found no findings and include the exact commands that were run.
 8. Summarize the run:
-   - Include commands run, project id, limit/concurrency, whether findings were exported, and the next command for a full scan.
+   - Include commands run, project id, limit/concurrency, whether the report contains findings, and the next command for a full scan.
 
 ## Validation
 
-- Prefer DeepSec's own command output, `corepack pnpm deepsec status`, and exported finding files as validation.
+- Prefer DeepSec's own command output, `corepack pnpm deepsec status`, and generated finding files as validation.
 - Do not start a dev server or browser unless the user explicitly asks for visual/runtime verification.
 - Before finishing, check `git diff --stat` and make sure no secrets, `node_modules`, `.env.local`, or raw scan state are staged by accident.

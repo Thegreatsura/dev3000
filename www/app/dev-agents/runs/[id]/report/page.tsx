@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, ExternalLink, ShieldCheck } from "lucide-react"
+import { AlertCircle, CheckCircle2, Download, ExternalLink, ShieldCheck } from "lucide-react"
 import type { Metadata } from "next"
 import Image from "next/image"
 import { redirect } from "next/navigation"
@@ -13,6 +13,7 @@ import { getDefaultDevAgentsRouteContext } from "@/lib/dev-agents-route"
 import type { WorkflowRun } from "@/lib/workflow-storage"
 import { getPublicWorkflowRun, getWorkflowRun } from "@/lib/workflow-storage"
 import type { WebVitals, WorkflowReport } from "@/types"
+import { AgentAnalysis } from "./agent-analysis"
 import { CoordinatedPlayers } from "./coordinated-players"
 import { DiffSection } from "./diff-section"
 import { LocalizedTimestamp } from "./localized-timestamp"
@@ -543,7 +544,7 @@ function getWorkflowDescription(report: WorkflowReport, workflowLabel: string): 
     case "turbopack-bundle-analyzer":
       return "Bundle analysis with before/after metrics and optimization guidance."
     case "deepsec-security-scan":
-      return "DeepSec security scan with project context and exported findings."
+      return "DeepSec security scan with project context and a generated report."
     case "url-audit":
       return "Read-only UX and performance analysis of the target URL."
     case "prompt":
@@ -581,6 +582,71 @@ function getFinalSummaryMarkdown(agentAnalysis?: string) {
   )
 
   return transcriptFinalSummaryMatch?.[1]?.trim() || ""
+}
+
+function extractAshFinalMessage(agentAnalysis?: string): string {
+  if (!agentAnalysis) return ""
+
+  const ndjsonMatch = agentAnalysis.match(/\*\*Stream Events:\*\*\s*```ndjson\s*([\s\S]*?)\s*```/)
+  const ndjson = ndjsonMatch?.[1]
+  if (!ndjson) return ""
+
+  let finalMessage = ""
+  for (const line of ndjson.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    try {
+      const event = JSON.parse(trimmed) as {
+        type?: string
+        data?: {
+          finishReason?: string
+          message?: string
+        }
+      }
+      if (
+        event.type === "message.completed" &&
+        event.data?.finishReason === "stop" &&
+        typeof event.data.message === "string"
+      ) {
+        finalMessage = event.data.message.trim()
+      }
+    } catch {
+      // Ignore non-JSON transcript lines.
+    }
+  }
+
+  return finalMessage
+}
+
+function getGeneratedReportMarkdown(report: WorkflowReport): string {
+  const storedReport = report.generatedReportMarkdown?.trim()
+  if (storedReport) return storedReport
+
+  if (report.workflowType === "deepsec-security-scan") {
+    return extractAshFinalMessage(report.agentAnalysis) || getFinalSummaryMarkdown(report.agentAnalysis)
+  }
+
+  return ""
+}
+
+function slugifyFilenamePart(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "report"
+  )
+}
+
+function getGeneratedReportFilename(report: WorkflowReport, run: WorkflowRun): string {
+  const storedFilename = report.generatedReportFilename?.trim()
+  if (storedFilename) return storedFilename
+
+  const projectName = report.projectName || run.projectName || "project"
+  const suffix = report.workflowType === "deepsec-security-scan" ? "deepsec-report" : "run-report"
+  return `${slugifyFilenamePart(projectName)}-${suffix}.md`
 }
 
 function cleanSummaryLine(line: string) {
@@ -780,9 +846,12 @@ function getOutcomeSummary(report: WorkflowReport, metricRows: MetricRow[]) {
   }
 
   if (report.workflowType === "deepsec-security-scan") {
+    const hasGeneratedReport = getGeneratedReportMarkdown(report).length > 0
     return {
       title: "Outcome Summary",
-      description: "DeepSec completed a code-only scan flow. Review the exported findings and run transcript below."
+      description: hasGeneratedReport
+        ? "DeepSec generated a code-only scan report. Review it below or download it."
+        : "DeepSec completed a code-only scan flow. Review the run details below."
     }
   }
 
@@ -1173,6 +1242,11 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
   const workflowLabel = getWorkflowLabel(report, run)
   const reportLabel = getRunnerReportLabel(run)
   const reportDescription = getWorkflowDescription(report, workflowLabel)
+  const generatedReportMarkdown = getGeneratedReportMarkdown(report)
+  const generatedReportDownloadUrl = generatedReportMarkdown
+    ? `data:text/markdown;charset=utf-8,${encodeURIComponent(generatedReportMarkdown)}`
+    : undefined
+  const generatedReportFilename = getGeneratedReportFilename(report, run)
   const projectDisplayName = report.projectName || run.projectName
   const devAgentId = report.devAgentId || run.devAgentId
   const devAgentHref =
@@ -1221,6 +1295,14 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
   )
   const pageActions = (
     <>
+      {generatedReportDownloadUrl ? (
+        <Button asChild size="sm" variant="outline" className="h-8 rounded-md px-3 text-[13px]">
+          <a href={generatedReportDownloadUrl} download={generatedReportFilename}>
+            Download Report
+            <Download className="ml-1 size-3.5" />
+          </a>
+        </Button>
+      ) : null}
       {isOwner ? <ShareButton runId={id} initialIsPublic={run.isPublic ?? false} /> : null}
       {run.prUrl ? (
         <Button asChild size="sm" className="h-8 rounded-md px-3 text-[13px]">
@@ -1257,7 +1339,7 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
       reportLabel={reportLabel}
       subtitle={projectSubtitle}
       description={reportDescription}
-      actions={isOwner || run.prUrl ? pageActions : undefined}
+      actions={isOwner || run.prUrl || generatedReportDownloadUrl ? pageActions : undefined}
     >
       {reportBody}
     </StandaloneReportFrame>
@@ -1266,6 +1348,13 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
 
 function ReportContentBody({ run, report }: { run: WorkflowRun; report: WorkflowReport }) {
   const workflowType = report.workflowType || run.type || "cls-fix"
+  const generatedReportMarkdown = getGeneratedReportMarkdown(report)
+  const effectiveSuccessEvalResult =
+    workflowType === "deepsec-security-scan" && generatedReportMarkdown ? true : report.successEvalResult
+  const successEvalText =
+    workflowType === "deepsec-security-scan"
+      ? "Was a DeepSec report generated and made available for download?"
+      : report.successEval
   const metricRows = buildMetricRows(report)
   const isEarlyExit = Boolean(report.earlyExitResult?.shouldExit)
   const hasMetricComparison = metricRows.some((row) => row.before && row.after)
@@ -1368,7 +1457,7 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
     runEndedAt >= runStartedAt
   const runDurationStats = getRunDurationStats(runStartedAt, runEndedAt, report.timing?.total.totalMs)
   const successEvalStyles =
-    report.successEvalResult === true
+    effectiveSuccessEvalResult === true
       ? {
           card: "border-emerald-900/70 bg-emerald-950/20",
           icon: "text-emerald-400",
@@ -1383,19 +1472,17 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
         }
   return (
     <div className="space-y-6">
-      {(report.successEvalResult != null || secondarySummary) && (
+      {(effectiveSuccessEvalResult != null || secondarySummary) && (
         <div className="grid gap-4 md:grid-cols-2">
-          {report.successEvalResult != null && (
+          {effectiveSuccessEvalResult != null && (
             <div className={`rounded-lg border p-4 ${successEvalStyles.card}`}>
               <div className="flex items-center gap-2">
                 <ShieldCheck className={`size-4 ${successEvalStyles.icon}`} />
                 <span className={`text-sm font-medium ${successEvalStyles.title}`}>
-                  Success Eval: {report.successEvalResult ? "Pass" : "Fail"}
+                  Success Eval: {effectiveSuccessEvalResult ? "Pass" : "Fail"}
                 </span>
               </div>
-              {report.successEval ? (
-                <p className={`mt-1 text-sm ${successEvalStyles.body}`}>{report.successEval}</p>
-              ) : null}
+              {successEvalText ? <p className={`mt-1 text-sm ${successEvalStyles.body}`}>{successEvalText}</p> : null}
             </div>
           )}
           {secondarySummary && (
@@ -1584,6 +1671,12 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
           <div className="whitespace-pre-wrap rounded-lg border border-border bg-muted/20 p-4 text-sm">
             {report.customPrompt}
           </div>
+        </ReportSection>
+      ) : null}
+
+      {workflowType === "deepsec-security-scan" && generatedReportMarkdown ? (
+        <ReportSection title="DeepSec Report" description="Generated report from this code-only DeepSec run.">
+          <AgentAnalysis content={generatedReportMarkdown} />
         </ReportSection>
       ) : null}
 

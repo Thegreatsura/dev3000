@@ -3889,7 +3889,7 @@ function getAgentProgressLabels({ workflowType, devAgentName }: { workflowType?:
   if (isDeepsecSecurityScanWorkflow(workflowType)) {
     return {
       analysis: "AI agent running DeepSec scan...",
-      verification: "DeepSec run finished, checking exported findings...",
+      verification: "DeepSec run finished, checking generated report...",
       report: () => "Generating DeepSec report..."
     }
   }
@@ -4417,10 +4417,16 @@ export async function agentFixLoopStep(
   const totalCacheReadTokens = agentResult.usage.cacheReadTokens
   const totalCacheCreationTokens = agentResult.usage.cacheCreationTokens
   const totalCostUsd = agentResult.costUsd
+  const generatedReportMarkdown =
+    workflowType === "deepsec-security-scan" && agentResult.summary.trim().length > 0
+      ? agentResult.summary.trim()
+      : undefined
 
   // ── Success Eval ──────────────────────────────────────────────────────
   let successEvalResult: boolean | null = null
-  if (devAgentSuccessEval?.trim()) {
+  if (workflowType === "deepsec-security-scan") {
+    successEvalResult = Boolean(generatedReportMarkdown)
+  } else if (devAgentSuccessEval?.trim()) {
     try {
       timer.start("Success eval")
       workflowLog(`[Agent] Running success eval with ${SUCCESS_EVAL_MODEL}`)
@@ -4523,6 +4529,8 @@ Did the agent meet the success criteria? Respond with JSON only.`
     costUsd: totalCostUsd,
     agentAnalysis: agentResult.transcript,
     agentAnalysisModel: agentResult.modelId,
+    generatedReportMarkdown,
+    generatedReportFilename: workflowType === "deepsec-security-scan" ? `${reportId}-deepsec-report.md` : undefined,
     skillsInstalled: skillsInstalled.length > 0 ? skillsInstalled : undefined,
     skillsLoaded: agentResult.skillsLoaded.length > 0 ? agentResult.skillsLoaded : undefined,
     turbopackBundleComparison,
@@ -9205,7 +9213,7 @@ ${screenshotRows}
         : effectiveWorkflowType === "deepsec-security-scan"
           ? `### Results
 - DeepSec was run from the project checkout.
-- Review exported markdown findings under \`.deepsec/findings\`.
+- Review the generated markdown findings report.
 - See the workflow report for the command transcript and scan scope.`
           : `### Results
 | Metric | Before | After |

@@ -430,10 +430,10 @@ const REACT_BEST_PRACTICES_SKILL_REFS = [
 ]
 
 export const DEEPSEC_DEV_AGENT_DESCRIPTION =
-  "Install DeepSec, bootstrap project-specific context, run a bounded first-pass security scan, and export findings."
+  "Install DeepSec, bootstrap project-specific context, run a bounded first-pass security scan, and generate a report."
 
 export const DEEPSEC_DEV_AGENT_INSTRUCTIONS =
-  "Run DeepSec against the selected project checkout without starting a dev server. Initialize the .deepsec workspace if needed, install dependencies, fill INFO.md with concise project-specific security context, run the regex scan, process a bounded first pass with AI Gateway credentials from the environment, and export markdown findings. Do not write secrets to files. Do not run an unbounded DeepSec process unless run-specific instructions explicitly request a full scan."
+  "Run DeepSec against the selected project checkout without starting a dev server. Initialize the .deepsec workspace if needed, install dependencies, fill INFO.md with concise project-specific security context, run the regex scan, process a bounded first pass with AI Gateway credentials from the environment, and generate a markdown report that dev3000 can show and make available for download. Do not write secrets to files. Do not run an unbounded DeepSec process unless run-specific instructions explicitly request a full scan."
 
 export const DEEPSEC_DEV_AGENT_ACTION_STEPS: DevAgentActionStep[] = [
   {
@@ -461,13 +461,12 @@ export const DEEPSEC_DEV_AGENT_ACTION_STEPS: DevAgentActionStep[] = [
     kind: "send-prompt",
     config: {
       prompt:
-        "Export findings as markdown, create a short findings README if no findings export, verify the git diff excludes secrets/raw scan state, and summarize commands, scope, findings, and next full-scan command."
+        "Generate the markdown findings report, create a short no-findings README if the report has no findings, verify the git diff excludes secrets/raw scan state, and summarize commands, scope, findings, and next full-scan command."
     }
   }
 ]
 
-export const DEEPSEC_DEV_AGENT_SUCCESS_EVAL =
-  "Was DeepSec initialized or reused correctly, was project-specific INFO.md context prepared, did scan and bounded AI processing run, and were findings or a no-findings summary exported without committing secrets or raw scan state?"
+export const DEEPSEC_DEV_AGENT_SUCCESS_EVAL = "Was a DeepSec report generated and made available for download?"
 
 const BUILTIN_DEV_AGENTS: Array<Omit<DevAgent, "usageCount">> = [
   {
