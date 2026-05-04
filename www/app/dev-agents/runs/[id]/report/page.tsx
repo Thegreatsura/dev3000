@@ -636,6 +636,25 @@ function getGeneratedReportMarkdown(report: WorkflowReport): string {
   return ""
 }
 
+function getGeneratedReportCost(markdown: string): string | null {
+  const contentWithoutCode = markdown.replace(/```[\s\S]*?```/g, "")
+
+  for (const rawLine of contentWithoutCode.split("\n")) {
+    const line = rawLine
+      .replace(/^[-*]\s+/, "")
+      .replace(/\*\*/g, "")
+      .trim()
+    const match = line.match(/^Cost:\s*(.+)$/i)
+    if (!match) continue
+
+    const value = match[1].trim()
+    const costMatch = value.match(/~?\$[\d,]+(?:\.\d+)?/)
+    return costMatch?.[0] || value
+  }
+
+  return null
+}
+
 function stripGeneratedReportWebOnlySections(markdown: string): string {
   const lines = markdown.split("\n")
   const output: string[] = []
@@ -1418,6 +1437,16 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
     stripGeneratedReportWebOnlySections(generatedReportMarkdown)
   )
   const generatedReportDisplay = extractLeadingReportHeading(generatedReportWebMarkdown)
+  const generatedReportCost =
+    workflowType === "deepsec-security-scan" ? getGeneratedReportCost(generatedReportMarkdown) : null
+  const costValue =
+    generatedReportCost ?? (typeof report.costUsd === "number" ? formatUsd(report.costUsd) : "Not reported")
+  const costDetail =
+    generatedReportCost !== null
+      ? "From generated DeepSec report"
+      : typeof report.costUsd === "number"
+        ? undefined
+        : "No cost data recorded for this run"
   const effectiveSuccessEvalResult =
     workflowType === "deepsec-security-scan" && generatedReportMarkdown ? true : report.successEvalResult
   const successEvalText =
@@ -1667,11 +1696,7 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
 
       <ReportSection title="Run Context" description="Compact run metadata and environment details.">
         <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
-          <SummaryItem
-            label="Cost"
-            value={typeof report.costUsd === "number" ? formatUsd(report.costUsd) : "Not reported"}
-            detail={typeof report.costUsd === "number" ? undefined : "No cost data recorded for this run"}
-          />
+          <SummaryItem label="Cost" value={costValue} detail={costDetail} />
           {!isMarketplaceAgent ? <SummaryItem label="Model" value={report.agentAnalysisModel || "unknown"} /> : null}
           {!isMarketplaceAgent && report.devAgentRevision ? (
             <SummaryItem
