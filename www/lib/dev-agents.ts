@@ -117,8 +117,8 @@ export type DevAgentEarlyExitOperator = "<" | "<=" | ">" | ">=" | "===" | "!==" 
 
 export const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
 export const ANALYZE_BUNDLE_SKILL_INSTALL_ARG = "vercel-labs/dev3000@analyze-bundle"
-export const DEEPSEC_SKILL_INSTALL_ARG = "vercel-labs/dev3000@deepsec"
-export const DEEPSEC_SKILL_SOURCE_URL = "https://github.com/vercel-labs/dev3000/tree/main/.agents/skills/deepsec"
+export const DEEPSEC_SKILL_INSTALL_ARG = "vercel-labs/deepsec@deepsec"
+export const DEEPSEC_SKILL_SOURCE_URL = "https://github.com/vercel-labs/deepsec/tree/main/packages/deepsec"
 export const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const LEGACY_D3K_SKILL_INSTALL_ARGS = new Set([
   "https://github.com/vercel-labs/dev3000/tree/main/skills/d3k",

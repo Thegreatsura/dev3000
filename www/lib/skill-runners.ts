@@ -142,10 +142,10 @@ const DEFAULT_SKILL_RUNNER_SEEDS: DefaultSkillRunnerSeed[] = [
   },
   {
     id: "deepsec",
-    canonicalPath: "vercel-labs/dev3000/deepsec",
-    sourceUrl: "https://skills.sh/vercel-labs/dev3000/deepsec",
+    canonicalPath: "vercel-labs/deepsec/deepsec",
+    sourceUrl: "https://github.com/vercel-labs/deepsec/tree/main/packages/deepsec",
     installArg: DEEPSEC_SKILL_INSTALL_ARG,
-    packageName: "vercel-labs/dev3000",
+    packageName: "vercel-labs/deepsec",
     skillName: "deepsec",
     displayName: "DeepSec Security Scan",
     description: DEEPSEC_DEV_AGENT_DESCRIPTION,
@@ -330,6 +330,7 @@ function getExecutionProfile(
   if (record.executionProfile) return record.executionProfile
   if (
     record.installArg === DEEPSEC_SKILL_INSTALL_ARG ||
+    (record.packageName === "vercel-labs/deepsec" && record.skillName === "deepsec") ||
     (record.packageName === "vercel-labs/dev3000" && record.skillName === "deepsec")
   ) {
     return "deepsec"
@@ -609,14 +610,11 @@ function buildFallbackDefaultSkillRunnerDetails(seed: DefaultSkillRunnerSeed): S
 }
 
 async function fetchDefaultSkillRunnerDetails(seed: DefaultSkillRunnerSeed): Promise<SkillsShSkillDetails> {
-  try {
-    return await fetchSkillsShSkillDetails(seed)
-  } catch (error) {
-    if (seed.executionProfile !== "deepsec") {
-      throw error
-    }
+  if (seed.executionProfile === "deepsec") {
     return buildFallbackDefaultSkillRunnerDetails(seed)
   }
+
+  return await fetchSkillsShSkillDetails(seed)
 }
 
 export async function listSkillRunners(team: DevAgentTeam): Promise<DevAgent[]> {
