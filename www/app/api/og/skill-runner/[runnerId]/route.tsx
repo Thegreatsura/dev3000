@@ -77,11 +77,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ run
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          width: "100%",
-          zIndex: 1
+          width: "100%"
         }}
       >
-        <div>
+        <div style={{ display: "flex", flexDirection: "column" }}>
           <div style={eyebrowStyle}>{eyebrow}</div>
           <div style={titleStyle}>{title}</div>
           <div style={subtitleStyle}>{subtitle}</div>
@@ -189,8 +188,7 @@ const scanPanelStyle: CSSProperties = {
   background: "#090909",
   padding: 24,
   display: "flex",
-  flexDirection: "column",
-  zIndex: 1
+  flexDirection: "column"
 }
 
 const terminalBarStyle: CSSProperties = {
