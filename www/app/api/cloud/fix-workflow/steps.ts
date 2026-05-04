@@ -9172,7 +9172,8 @@ ${screenshotRows}
     }
 
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://dev3000.ai"
-    const reportPageUrl = `${siteUrl}/dev-agents/runs/${reportId}/report`
+    const reportRunsPath = progressContext?.runnerKind === "skill-runner" ? "skill-runner/runs" : "dev-agents/runs"
+    const reportPageUrl = `${siteUrl}/${reportRunsPath}/${reportId}/report`
 
     const extractFinalOutputSummary = (analysis?: string): string[] => {
       if (!analysis) return []

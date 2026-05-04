@@ -91,6 +91,14 @@ interface DefaultSkillRunnerSeed {
   executionProfile?: SkillRunnerExecutionProfile
 }
 
+export interface SkillRunnerOpenGraphProfile {
+  id: string
+  name: string
+  description: string
+  canonicalPath: string
+  executionProfile?: SkillRunnerExecutionProfile
+}
+
 const SYSTEM_AUTHOR: DevAgentAuthor = {
   id: "system",
   email: "system@vercel.com",
@@ -624,6 +632,19 @@ export async function listSkillRunners(team: DevAgentTeam): Promise<DevAgent[]> 
 export async function getSkillRunner(team: DevAgentTeam, runnerId: string): Promise<DevAgent | null> {
   const runners = await listSkillRunners(team)
   return runners.find((runner) => runner.id === runnerId) || null
+}
+
+export function getDefaultSkillRunnerOpenGraphProfile(runnerId: string): SkillRunnerOpenGraphProfile | null {
+  const seed = DEFAULT_SKILL_RUNNER_SEEDS.find((item) => item.id === runnerId)
+  if (!seed) return null
+
+  return {
+    id: seed.id,
+    name: seed.displayName,
+    description: seed.description,
+    canonicalPath: seed.canonicalPath,
+    executionProfile: seed.executionProfile
+  }
 }
 
 function findDefaultSeedByCanonicalPath(canonicalPath: string) {

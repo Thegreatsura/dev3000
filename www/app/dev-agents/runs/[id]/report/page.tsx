@@ -1,5 +1,5 @@
 import { AlertCircle, CheckCircle2, ChevronRight, Download, ExternalLink, ShieldCheck } from "lucide-react"
-import type { Metadata } from "next"
+import type { Metadata, Route } from "next"
 import Image from "next/image"
 import { redirect } from "next/navigation"
 import { type ReactNode, Suspense } from "react"
@@ -10,6 +10,11 @@ import { getCurrentUser } from "@/lib/auth"
 import { getSignInPath } from "@/lib/auth-redirect"
 import { readBlobJson } from "@/lib/blob-store"
 import { getDefaultDevAgentsRouteContext } from "@/lib/dev-agents-route"
+import {
+  getFinalSummaryMarkdown,
+  getGeneratedReportCostUsd,
+  getGeneratedReportMarkdown
+} from "@/lib/workflow-report-summary"
 import type { WorkflowRun } from "@/lib/workflow-storage"
 import { getPublicWorkflowRun, getWorkflowRun } from "@/lib/workflow-storage"
 import type { WebVitals, WorkflowReport } from "@/types"
@@ -20,6 +25,20 @@ import { LocalizedTimestamp } from "./localized-timestamp"
 import { ReportPending } from "./report-pending"
 import { ScreenshotPlayer } from "./screenshot-player"
 import { ShareButton } from "./share-button"
+
+type ReportRouteKind = "dev-agent" | "skill-runner"
+
+function getReportRouteKind(run: Pick<WorkflowRun, "runnerKind">): ReportRouteKind {
+  return run.runnerKind === "skill-runner" ? "skill-runner" : "dev-agent"
+}
+
+function getRunsPath(kind: ReportRouteKind): string {
+  return kind === "skill-runner" ? "/skill-runner/runs" : "/dev-agents/runs"
+}
+
+function getReportPath(id: string, kind: ReportRouteKind): string {
+  return `${getRunsPath(kind)}/${id}/report`
+}
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -567,95 +586,6 @@ function getEarlyExitSummary(report: WorkflowReport) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-function getFinalSummaryMarkdown(agentAnalysis?: string) {
-  if (!agentAnalysis) return ""
-
-  const legacyFinalOutputMatch = agentAnalysis.match(/## Final Output\s+([\s\S]*)$/)
-  if (legacyFinalOutputMatch?.[1]?.trim()) {
-    return legacyFinalOutputMatch[1].trim()
-  }
-
-  const transcriptFinalSummaryMatch = agentAnalysis.match(
-    /### Final summary\s+\*\*User:\*\*[\s\S]*?\*\*Claude:\*\*\n([\s\S]*?)\n\*\*Result JSON:\*\*/i
-  )
-
-  return transcriptFinalSummaryMatch?.[1]?.trim() || ""
-}
-
-function extractAshFinalMessage(agentAnalysis?: string): string {
-  if (!agentAnalysis) return ""
-
-  const markerIndex = agentAnalysis.indexOf("**Stream Events:**")
-  if (markerIndex === -1) return ""
-
-  const fenceIndex = agentAnalysis.indexOf("```ndjson", markerIndex)
-  if (fenceIndex === -1) return ""
-
-  const ndjsonStart = agentAnalysis.indexOf("\n", fenceIndex)
-  if (ndjsonStart === -1) return ""
-
-  let finalMessage = ""
-  for (const line of agentAnalysis.slice(ndjsonStart + 1).split("\n")) {
-    const trimmed = line.trim()
-    if (trimmed === "```") break
-    if (!trimmed) continue
-
-    try {
-      const event = JSON.parse(trimmed) as {
-        type?: string
-        data?: {
-          finishReason?: string
-          message?: string
-        }
-      }
-      if (
-        event.type === "message.completed" &&
-        event.data?.finishReason === "stop" &&
-        typeof event.data.message === "string"
-      ) {
-        finalMessage = event.data.message.trim()
-      }
-    } catch {
-      // Ignore non-JSON transcript lines.
-    }
-  }
-
-  return finalMessage
-}
-
-function getGeneratedReportMarkdown(report: WorkflowReport): string {
-  const storedReport = report.generatedReportMarkdown?.trim()
-  if (storedReport) return storedReport
-
-  if (report.workflowType === "deepsec-security-scan") {
-    return extractAshFinalMessage(report.agentAnalysis) || getFinalSummaryMarkdown(report.agentAnalysis)
-  }
-
-  return ""
-}
-
-function getGeneratedReportCost(markdown: string): string | null {
-  const contentWithoutCode = markdown.replace(/```[\s\S]*?```/g, "")
-
-  for (const rawLine of contentWithoutCode.split("\n")) {
-    const line = rawLine
-      .replace(/^[-*]\s+/, "")
-      .replace(/\*\*/g, "")
-      .trim()
-    const match = line.match(/^Cost:\s*(.+)$/i)
-    if (!match) continue
-
-    const value = match[1].trim()
-    const costMatch = value.match(/~?\$([\d,]+(?:\.\d+)?)/)
-    if (!costMatch) return value
-
-    const amount = Number(costMatch[1].replace(/,/g, ""))
-    return Number.isFinite(amount) ? formatUsd(amount) : costMatch[0].replace(/^~/, "")
-  }
-
-  return null
 }
 
 function extractGeneratedReportSection(markdown: string, headingPattern: RegExp): string {
@@ -1242,16 +1172,33 @@ function StandaloneReportFrame({
 }
 
 export default function WorkflowReportPage({ params }: { params: Promise<{ id: string }> }) {
+  return <WorkflowReportRoute params={params} routeKind="dev-agent" />
+}
+
+export function WorkflowReportRoute({
+  params,
+  routeKind
+}: {
+  params: Promise<{ id: string }>
+  routeKind: ReportRouteKind
+}) {
   return (
     <Suspense fallback={<ReportLoading />}>
-      <WorkflowReportPageData params={params} />
+      <WorkflowReportPageData params={params} routeKind={routeKind} />
     </Suspense>
   )
 }
 
-async function WorkflowReportPageData({ params }: { params: Promise<{ id: string }> }) {
+async function WorkflowReportPageData({
+  params,
+  routeKind
+}: {
+  params: Promise<{ id: string }>
+  routeKind: ReportRouteKind
+}) {
   const user = await getCurrentUser()
   const { id } = await params
+  const requestedReportPath = getReportPath(id, routeKind)
 
   let run = user ? await getWorkflowRun(user.id, id) : null
   let isOwner = false
@@ -1259,7 +1206,7 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
   if (!run) {
     run = await getPublicWorkflowRun(id)
     if (!run && !user) {
-      redirect(getSignInPath(`/dev-agents/runs/${id}/report`))
+      redirect(getSignInPath(requestedReportPath))
     }
   }
 
@@ -1268,7 +1215,12 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
   }
 
   if (!run) {
-    redirect("/dev-agents/runs")
+    redirect(getRunsPath(routeKind) as Route)
+  }
+
+  const canonicalRouteKind = getReportRouteKind(run)
+  if (canonicalRouteKind !== routeKind) {
+    redirect(getReportPath(id, canonicalRouteKind) as Route)
   }
 
   const ownerRouteContext = isOwner ? await getDefaultDevAgentsRouteContext() : null
@@ -1328,7 +1280,8 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
         <DevAgentsDashboardShell
           teams={ownerRouteContext.teams}
           selectedTeam={ownerRouteContext.selectedTeam}
-          section={run.runnerKind === "skill-runner" ? "skill-runner" : "dev-agents"}
+          section="runs"
+          runsHref={getRunsPath(canonicalRouteKind)}
           title={run.projectName}
           subtitle="Run failed"
         >
@@ -1358,7 +1311,8 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
         <DevAgentsDashboardShell
           teams={ownerRouteContext.teams}
           selectedTeam={ownerRouteContext.selectedTeam}
-          section={run.runnerKind === "skill-runner" ? "skill-runner" : "dev-agents"}
+          section="runs"
+          runsHref={getRunsPath(canonicalRouteKind)}
           title={run.projectName}
           subtitle="Run in progress"
         >
@@ -1393,7 +1347,8 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
         <DevAgentsDashboardShell
           teams={ownerRouteContext.teams}
           selectedTeam={ownerRouteContext.selectedTeam}
-          section={run.runnerKind === "skill-runner" ? "skill-runner" : "dev-agents"}
+          section="runs"
+          runsHref={getRunsPath(canonicalRouteKind)}
           title={run.projectName}
           subtitle="Report unavailable"
         >
@@ -1489,7 +1444,8 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
       <DevAgentsDashboardShell
         teams={ownerRouteContext.teams}
         selectedTeam={ownerRouteContext.selectedTeam}
-        section={run.runnerKind === "skill-runner" ? "skill-runner" : "dev-agents"}
+        section="runs"
+        runsHref={getRunsPath(canonicalRouteKind)}
         title={primaryHeading}
         subtitle={projectSubtitle}
         description={reportDescription}
@@ -1515,6 +1471,7 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
 
 function ReportContentBody({ run, report }: { run: WorkflowRun; report: WorkflowReport }) {
   const workflowType = report.workflowType || run.type || "cls-fix"
+  const runsHref = getRunsPath(getReportRouteKind(run))
   const generatedReportMarkdown = getGeneratedReportMarkdown(report)
   const generatedReportWebMarkdown = stripGeneratedReportCodeFenceLabels(
     stripGeneratedReportWebOnlySections(generatedReportMarkdown)
@@ -1525,15 +1482,19 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
       ? moveGeneratedReportSectionToTop(generatedReportDisplay.body, /^Findings:/i)
       : generatedReportDisplay.body
   const generatedReportCost =
-    workflowType === "deepsec-security-scan" ? getGeneratedReportCost(generatedReportMarkdown) : null
+    workflowType === "deepsec-security-scan" ? getGeneratedReportCostUsd(generatedReportMarkdown) : null
   const generatedReportScanScope =
     workflowType === "deepsec-security-scan" ? getGeneratedReportScanScope(generatedReportMarkdown) : {}
   const costValue =
-    generatedReportCost ?? (typeof report.costUsd === "number" ? formatUsd(report.costUsd) : "Not reported")
+    typeof generatedReportCost === "number"
+      ? formatUsd(generatedReportCost)
+      : typeof report.costUsd === "number" && report.costUsd > 0
+        ? formatUsd(report.costUsd)
+        : "Not reported"
   const costDetail =
-    generatedReportCost !== null
+    typeof generatedReportCost === "number"
       ? "From generated DeepSec report"
-      : typeof report.costUsd === "number"
+      : typeof report.costUsd === "number" && report.costUsd > 0
         ? undefined
         : "No cost data recorded for this run"
   const modelValue = generatedReportScanScope.model || report.agentAnalysisModel || "unknown"
@@ -2126,7 +2087,7 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
 
       <div className="flex flex-wrap gap-3">
         <Button asChild variant="outline">
-          <a href="/dev-agents/runs">Back to runs</a>
+          <a href={runsHref}>Back to runs</a>
         </Button>
         {run.prUrl ? (
           <Button asChild>

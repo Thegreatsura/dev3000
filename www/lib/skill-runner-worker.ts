@@ -868,6 +868,95 @@ async function getWorkerProjectMissingEnvKeys(
   return []
 }
 
+async function resolveSkillRunnerWorkerProjectFromLookupProject(
+  accessToken: string,
+  team: VercelTeam,
+  project: VercelProjectLookupProject
+): Promise<SkillRunnerWorkerProject | null> {
+  if (!project.id || project.name !== SKILL_RUNNER_WORKER_PROJECT_NAME) {
+    return null
+  }
+
+  const latestDeployment = resolveLatestDeployment(project)
+  const desiredWorkerBranch = resolveWorkerGitBranch()
+  const desiredWorkerGitSha = await resolveDesiredWorkerGitSha(desiredWorkerBranch)
+  const latestDeploymentDetails =
+    latestDeployment?.id && latestDeployment.readyState === "READY"
+      ? await getDeploymentDetails(accessToken, team, latestDeployment.id)
+      : latestDeployment?.id
+        ? await getDeploymentDetails(accessToken, team, latestDeployment.id)
+        : null
+  const latestDeploymentGitSha = normalizeGitSha(
+    latestDeploymentDetails?.meta?.githubCommitSha || latestDeploymentDetails?.meta?.gitCommitSha
+  )
+  const latestDeploymentGitBranch =
+    latestDeploymentDetails?.meta?.githubCommitRef?.trim() || latestDeploymentDetails?.meta?.gitCommitRef?.trim()
+  const workerBaseUrl = resolveWorkerBaseUrl(project)
+  const workerVersion =
+    workerBaseUrl && (latestDeployment?.readyState === "READY" || latestDeployment?.state === "READY")
+      ? await fetchWorkerVersionPayload(workerBaseUrl)
+      : null
+  const missingEnvKeys = await getWorkerProjectMissingEnvKeys(
+    accessToken,
+    team,
+    project.id,
+    latestDeployment?.id,
+    latestDeployment?.createdAt
+  )
+  const shellVersionStatus = resolveShellVersionStatus({
+    desiredGitSha: desiredWorkerGitSha,
+    deployedGitSha: latestDeploymentGitSha,
+    reportedGitSha: workerVersion?.workerShellVersion,
+    runtimeManifestVersion: workerVersion?.runtimeManifestVersion
+  })
+
+  return {
+    projectId: project.id,
+    projectName: project.name,
+    workerBaseUrl,
+    dashboardUrl: buildDashboardUrl(team, project.name),
+    missingEnvKeys,
+    latestDeploymentId: latestDeployment?.id,
+    latestDeploymentReadyState: latestDeployment?.readyState || latestDeployment?.state,
+    latestDeploymentCreatedAt: latestDeployment?.createdAt,
+    latestDeploymentGitSha,
+    latestDeploymentGitBranch,
+    desiredWorkerBranch,
+    desiredWorkerGitSha,
+    workerShellVersion: workerVersion?.workerShellVersion,
+    workerReportedBranch: workerVersion?.workerBranch,
+    runtimeManifestVersion: workerVersion?.runtimeManifestVersion,
+    shellVersionStatus
+  }
+}
+
+async function getSkillRunnerWorkerProjectByName(
+  accessToken: string,
+  team: VercelTeam
+): Promise<SkillRunnerWorkerProject | null> {
+  const apiUrl = new URL(`https://api.vercel.com/v9/projects/${encodeURIComponent(SKILL_RUNNER_WORKER_PROJECT_NAME)}`)
+  apiUrl.searchParams.set("teamId", team.id)
+
+  const response = await fetch(apiUrl.toString(), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    },
+    cache: "no-store"
+  })
+
+  if (response.status === 404) {
+    return null
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Failed to inspect existing runner project: ${response.status} ${errorText}`)
+  }
+
+  const project = (await response.json()) as VercelProjectLookupProject
+  return resolveSkillRunnerWorkerProjectFromLookupProject(accessToken, team, project)
+}
+
 export async function findSkillRunnerWorkerProject(
   accessToken: string,
   team: VercelTeam
@@ -896,60 +985,10 @@ export async function findSkillRunnerWorkerProject(
     projects.find((project) => project.name?.toLowerCase() === SKILL_RUNNER_WORKER_PROJECT_NAME)
 
   if (!exactMatch?.id || !exactMatch.name) {
-    return null
+    return getSkillRunnerWorkerProjectByName(accessToken, team)
   }
 
-  const latestDeployment = resolveLatestDeployment(exactMatch)
-  const desiredWorkerBranch = resolveWorkerGitBranch()
-  const desiredWorkerGitSha = await resolveDesiredWorkerGitSha(desiredWorkerBranch)
-  const latestDeploymentDetails =
-    latestDeployment?.id && latestDeployment.readyState === "READY"
-      ? await getDeploymentDetails(accessToken, team, latestDeployment.id)
-      : latestDeployment?.id
-        ? await getDeploymentDetails(accessToken, team, latestDeployment.id)
-        : null
-  const latestDeploymentGitSha = normalizeGitSha(
-    latestDeploymentDetails?.meta?.githubCommitSha || latestDeploymentDetails?.meta?.gitCommitSha
-  )
-  const latestDeploymentGitBranch =
-    latestDeploymentDetails?.meta?.githubCommitRef?.trim() || latestDeploymentDetails?.meta?.gitCommitRef?.trim()
-  const workerBaseUrl = resolveWorkerBaseUrl(exactMatch)
-  const workerVersion =
-    workerBaseUrl && (latestDeployment?.readyState === "READY" || latestDeployment?.state === "READY")
-      ? await fetchWorkerVersionPayload(workerBaseUrl)
-      : null
-  const missingEnvKeys = await getWorkerProjectMissingEnvKeys(
-    accessToken,
-    team,
-    exactMatch.id,
-    latestDeployment?.id,
-    latestDeployment?.createdAt
-  )
-  const shellVersionStatus = resolveShellVersionStatus({
-    desiredGitSha: desiredWorkerGitSha,
-    deployedGitSha: latestDeploymentGitSha,
-    reportedGitSha: workerVersion?.workerShellVersion,
-    runtimeManifestVersion: workerVersion?.runtimeManifestVersion
-  })
-
-  return {
-    projectId: exactMatch.id,
-    projectName: exactMatch.name,
-    workerBaseUrl,
-    dashboardUrl: buildDashboardUrl(team, exactMatch.name),
-    missingEnvKeys,
-    latestDeploymentId: latestDeployment?.id,
-    latestDeploymentReadyState: latestDeployment?.readyState || latestDeployment?.state,
-    latestDeploymentCreatedAt: latestDeployment?.createdAt,
-    latestDeploymentGitSha,
-    latestDeploymentGitBranch,
-    desiredWorkerBranch,
-    desiredWorkerGitSha,
-    workerShellVersion: workerVersion?.workerShellVersion,
-    workerReportedBranch: workerVersion?.workerBranch,
-    runtimeManifestVersion: workerVersion?.runtimeManifestVersion,
-    shellVersionStatus
-  }
+  return resolveSkillRunnerWorkerProjectFromLookupProject(accessToken, team, exactMatch)
 }
 
 export async function installSkillRunnerWorkerProject(
@@ -1048,6 +1087,12 @@ async function createWorkerProject(accessToken: string, team: VercelTeam): Promi
 
   if (!response.ok) {
     const errorText = await response.text()
+    if (response.status === 409 || /already exists|conflict/i.test(errorText)) {
+      const existingProject = await getSkillRunnerWorkerProjectByName(accessToken, team)
+      if (existingProject) {
+        return existingProject
+      }
+    }
     throw buildWorkerProjectCreateError(response.status, errorText)
   }
 

@@ -1,15 +1,15 @@
-import { Bot, Home, type LucideIcon, Settings } from "lucide-react"
+import { Bot, History, Home, type LucideIcon, Settings } from "lucide-react"
 import type { Route } from "next"
 import Link from "next/link"
 import type React from "react"
 import { TeamSwitcher } from "@/components/dev-agents/team-switcher"
-import { Button } from "@/components/ui/button"
 import type { VercelTeam } from "@/lib/vercel-teams"
 
 interface DevAgentsDashboardShellProps {
   teams: VercelTeam[]
   selectedTeam: VercelTeam
-  section?: "dev-agents" | "skill-runner" | "admin"
+  section?: "dev-agents" | "skill-runner" | "runs" | "admin"
+  runsHref?: string
   showAdminLink?: boolean
   title?: React.ReactNode
   subtitle?: React.ReactNode
@@ -29,6 +29,7 @@ export function DevAgentsDashboardShell({
   teams,
   selectedTeam,
   section = "dev-agents",
+  runsHref,
   showAdminLink = false,
   title,
   subtitle,
@@ -36,15 +37,31 @@ export function DevAgentsDashboardShell({
   actions,
   children
 }: DevAgentsDashboardShellProps) {
+  const effectiveRunsHref = runsHref || (section === "skill-runner" ? "/skill-runner/runs" : "/dev-agents/runs")
   const sectionHref =
     section === "skill-runner"
       ? `/${selectedTeam.slug}/skill-runner`
-      : section === "admin"
-        ? "/admin"
-        : `/${selectedTeam.slug}/dev-agents`
-  const sectionLabel = section === "skill-runner" ? "Skill Runner" : section === "admin" ? "Admin" : "Dev Agents"
+      : section === "runs"
+        ? effectiveRunsHref
+        : section === "admin"
+          ? "/admin"
+          : `/${selectedTeam.slug}/dev-agents`
+  const sectionLabel =
+    section === "skill-runner"
+      ? "Skill Runner"
+      : section === "runs"
+        ? "Runs"
+        : section === "admin"
+          ? "Admin"
+          : "Dev Agents"
   const sidebarItems: SidebarItem[] = [
     { label: "Overview", href: `/${selectedTeam.slug}`, icon: Home },
+    {
+      label: "Runs",
+      href: effectiveRunsHref,
+      icon: History,
+      active: section === "runs"
+    },
     {
       label: "Dev Agents",
       href: `/${selectedTeam.slug}/dev-agents`,
@@ -122,15 +139,7 @@ export function DevAgentsDashboardShell({
               </Link>
             </div>
 
-            {/* Right side actions */}
-            <Button
-              asChild
-              variant="ghost"
-              size="sm"
-              className="h-8 rounded-md border border-[#333] bg-transparent px-3 text-[13px] text-[#888] hover:bg-[#1a1a1a] hover:text-[#ededed]"
-            >
-              <Link href="/dev-agents/runs">Runs</Link>
-            </Button>
+            <div />
           </header>
 
           {/* Page content */}

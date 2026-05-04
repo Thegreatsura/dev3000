@@ -4,7 +4,6 @@ import type { Route } from "next"
 import Link from "next/link"
 import { useCallback, useRef, useState } from "react"
 import useSWR from "swr"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -25,6 +24,10 @@ interface DevAgentRunsClientProps {
   initialRuns: WorkflowRun[]
 }
 
+type DisplayRunStatus = WorkflowRun["status"] | "stalled"
+
+const STALE_RUNNING_AFTER_MS = 45 * 60 * 1000
+
 const fetcher = async (url: string) => {
   const res = await fetch(url)
   const data = await res.json()
@@ -35,8 +38,12 @@ const fetcher = async (url: string) => {
 function formatDuration(start: Date, end: Date): string {
   const diffMs = end.getTime() - start.getTime()
   const diffSec = Math.floor(diffMs / 1000)
+  const hours = Math.floor(diffSec / 3600)
   const minutes = Math.floor(diffSec / 60)
   const seconds = diffSec % 60
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`
+  }
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
@@ -63,6 +70,48 @@ function formatDevAgentLabel(run: WorkflowRun): string {
   return run.devAgentName || formatLegacyWorkflowType(run.type)
 }
 
+function getRunReportHref(run: WorkflowRun): Route {
+  const basePath = run.runnerKind === "skill-runner" ? "/skill-runner/runs" : "/dev-agents/runs"
+  return `${basePath}/${run.id}/report` as Route
+}
+
+function getDisplayRunStatus(run: WorkflowRun, now: number): DisplayRunStatus {
+  if (run.status !== "running") {
+    return run.status
+  }
+
+  const startedAt = Date.parse(run.timestamp)
+  if (!Number.isFinite(startedAt)) {
+    return run.status
+  }
+
+  return now - startedAt > STALE_RUNNING_AFTER_MS ? "stalled" : "running"
+}
+
+function formatStatus(status: DisplayRunStatus): string {
+  switch (status) {
+    case "done":
+      return "Done"
+    case "failure":
+      return "Failed"
+    case "stalled":
+      return "Stalled"
+    default:
+      return "Running"
+  }
+}
+
+function getStatusClassName(status: DisplayRunStatus): string {
+  switch (status) {
+    case "failure":
+      return "text-destructive"
+    case "done":
+      return "text-[#ededed]"
+    default:
+      return "text-[#888]"
+  }
+}
+
 function formatUsd(value?: number): string {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "—"
@@ -87,6 +136,7 @@ export default function DevAgentRunsClient({ userId, initialRuns }: DevAgentRuns
     refreshInterval: 5000,
     revalidateOnFocus: true
   })
+  const now = Date.now()
 
   const handleSelectAll = useCallback(
     (checked: boolean) => {
@@ -205,7 +255,10 @@ export default function DevAgentRunsClient({ userId, initialRuns }: DevAgentRuns
               {runs.map((run, index) => {
                 const createdAt = new Date(run.timestamp)
                 const completedAt = run.completedAt ? new Date(run.completedAt) : null
-                const duration = completedAt ? formatDuration(createdAt, completedAt) : "Running"
+                const displayStatus = getDisplayRunStatus(run, now)
+                const duration = completedAt
+                  ? formatDuration(createdAt, completedAt)
+                  : formatDuration(createdAt, new Date(now))
 
                 return (
                   <TableRow key={run.id} className="border-[#1f1f1f] hover:bg-[#161616]">
@@ -226,10 +279,7 @@ export default function DevAgentRunsClient({ userId, initialRuns }: DevAgentRuns
                       />
                     </TableCell>
                     <TableCell>
-                      <Link
-                        href={`/dev-agents/runs/${run.id}/report` as Route}
-                        className="font-medium text-[#ededed] hover:underline"
-                      >
+                      <Link href={getRunReportHref(run)} className="font-medium text-[#ededed] hover:underline">
                         {formatDevAgentLabel(run)}
                       </Link>
                     </TableCell>
@@ -237,13 +287,9 @@ export default function DevAgentRunsClient({ userId, initialRuns }: DevAgentRuns
                     <TableCell className="text-[#888]">{duration}</TableCell>
                     <TableCell className="text-[#888]">{formatUsd(run.costUsd)}</TableCell>
                     <TableCell>
-                      <Badge
-                        variant={
-                          run.status === "done" ? "default" : run.status === "failure" ? "destructive" : "secondary"
-                        }
-                      >
-                        {run.status}
-                      </Badge>
+                      <span className={`text-[13px] font-medium ${getStatusClassName(displayStatus)}`}>
+                        {formatStatus(displayStatus)}
+                      </span>
                     </TableCell>
                     <TableCell className="text-[#888]">{createdAt.toLocaleString()}</TableCell>
                   </TableRow>

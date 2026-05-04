@@ -467,7 +467,7 @@ export default function AdminRunsClient({ initialEvents, initialSinceDays }: Adm
                     <TableCell>
                       {event.runId ? (
                         <Link
-                          href={`/dev-agents/runs/${event.runId}/report` as Route}
+                          href={`/skill-runner/runs/${event.runId}/report` as Route}
                           className="text-[12px] text-[#ededed] underline decoration-[#333] underline-offset-4 hover:decoration-[#666]"
                         >
                           Report

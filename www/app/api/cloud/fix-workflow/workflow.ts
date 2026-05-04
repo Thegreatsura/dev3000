@@ -20,6 +20,7 @@ import {
   emitTelemetryEvent,
   relayTelemetryEventToControlPlane
 } from "@/lib/telemetry"
+import { getWorkflowReportCostUsd } from "@/lib/workflow-report-summary"
 import { persistWorkflowRun, type WorkflowRun, type WorkflowRunMirrorTarget } from "@/lib/workflow-storage"
 
 const workflowLog = console.log
@@ -1342,7 +1343,7 @@ async function loadWorkflowReportSummary(reportBlobUrl: string): Promise<Workflo
     return {
       clsScore: report.clsScore,
       afterClsScore: report.afterClsScore,
-      costUsd: report.costUsd,
+      costUsd: getWorkflowReportCostUsd(report),
       beforeWebVitals: report.beforeWebVitals,
       afterWebVitals: report.afterWebVitals,
       verificationStatus: report.verificationStatus,

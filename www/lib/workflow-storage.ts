@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { list } from "@vercel/blob"
 import { deleteBlobByPathOrUrl, putBlobAndBuildUrl, readBlobJson } from "@/lib/blob-store"
+import { getWorkflowReportCostUsd } from "@/lib/workflow-report-summary"
 import type { WebVitals, WorkflowReport } from "@/types"
 
 export type WorkflowType =
@@ -139,11 +140,18 @@ async function readWorkflowRunBlob(pathOrUrl: string): Promise<WorkflowRun | nul
     const run = await readBlobJson<WorkflowRun>(pathOrUrl)
     if (!run) return null
 
-    if ((typeof run.costUsd !== "number" || !Number.isFinite(run.costUsd)) && run.reportBlobUrl) {
+    if ((typeof run.costUsd !== "number" || !Number.isFinite(run.costUsd) || run.costUsd <= 0) && run.reportBlobUrl) {
       try {
         const report = await readBlobJson<WorkflowReport>(run.reportBlobUrl)
-        if (report && typeof report.costUsd === "number" && Number.isFinite(report.costUsd)) {
-          run.costUsd = report.costUsd
+        const costUsd = report ? getWorkflowReportCostUsd(report) : undefined
+        if (typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd > 0) {
+          run.costUsd = costUsd
+        }
+        if (report && run.status === "running") {
+          run.status = "done"
+        }
+        if (report?.timestamp && !run.completedAt) {
+          run.completedAt = report.timestamp
         }
       } catch (error) {
         console.error(`[Workflow Storage] Failed to backfill cost from report ${run.reportBlobUrl}:`, error)

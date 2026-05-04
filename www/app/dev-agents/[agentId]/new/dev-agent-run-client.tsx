@@ -765,7 +765,8 @@ export default function DevAgentRunClient({
       return
     }
 
-    window.location.href = `/dev-agents/runs/${result.runId}/report`
+    const reportBasePath = runnerKind === "skill-runner" ? "/skill-runner/runs" : "/dev-agents/runs"
+    window.location.href = `${reportBasePath}/${result.runId}/report`
   }
 
   async function continueAfterWorkerSetup() {
