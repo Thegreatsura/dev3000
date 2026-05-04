@@ -2433,8 +2433,9 @@ async function createD3kSandboxFromBaseSnapshot(
     await reportProgress("Restoring project source from Git...")
     const cloneScript = `
 set -euo pipefail
-rm -rf /vercel/sandbox
-mkdir -p /vercel
+sudo rm -rf /vercel/sandbox
+sudo mkdir -p /vercel
+sudo chown "$(id -u):$(id -g)" /vercel
 if [[ "$REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
   git clone "$REPO_URL" /vercel/sandbox
   cd /vercel/sandbox
