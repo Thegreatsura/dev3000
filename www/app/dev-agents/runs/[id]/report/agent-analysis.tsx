@@ -2,7 +2,7 @@
 
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { type ReactNode, useMemo, useState } from "react"
-import { type ControlsConfig, Streamdown } from "streamdown"
+import { type Components, type ControlsConfig, Streamdown } from "streamdown"
 
 interface ParsedStep {
   stepNumber: number
@@ -178,11 +178,13 @@ function getStepPhase(step: ParsedStep): TranscriptPhase {
 export function AgentAnalysis({
   content,
   controls,
-  nowrapTableColumn
+  nowrapTableColumn,
+  plainCodeBlocks = false
 }: {
   content: string
   controls?: ControlsConfig
   nowrapTableColumn?: number
+  plainCodeBlocks?: boolean
 }) {
   const parsed = useMemo(() => parseTranscript(content), [content])
 
@@ -208,6 +210,29 @@ export function AgentAnalysis({
   ]
     .filter(Boolean)
     .join(" ")
+  const markdownComponents = useMemo<Components | undefined>(() => {
+    if (!plainCodeBlocks) return undefined
+
+    return {
+      code({ children, className, node: _node, ...props }) {
+        const isBlock = "data-block" in props
+
+        if (!isBlock) {
+          return (
+            <code className={className} {...props}>
+              {children}
+            </code>
+          )
+        }
+
+        return (
+          <pre className="overflow-x-auto rounded-md border border-border bg-transparent px-4 py-3 font-mono text-sm leading-relaxed">
+            <code>{children}</code>
+          </pre>
+        )
+      }
+    }
+  }, [plainCodeBlocks])
 
   const groupedSteps = useMemo(() => {
     const groups: Record<TranscriptPhase, ParsedStep[]> = {
@@ -233,7 +258,7 @@ export function AgentAnalysis({
   if (!parsed.finalOutput && parsed.steps.length === 0) {
     return (
       <div className={analysisClassName}>
-        <Streamdown controls={controls} mode="static">
+        <Streamdown components={markdownComponents} controls={controls} mode="static">
           {normalizedRawContent}
         </Streamdown>
       </div>
@@ -245,7 +270,7 @@ export function AgentAnalysis({
       {/* Final Output - shown prominently at the top (with Git Diff section stripped) */}
       {cleanedFinalOutput && (
         <div className={analysisClassName}>
-          <Streamdown controls={controls} mode="static">
+          <Streamdown components={markdownComponents} controls={controls} mode="static">
             {cleanedFinalOutput}
           </Streamdown>
         </div>
@@ -276,7 +301,7 @@ export function AgentAnalysis({
                           <div>
                             <div className="text-xs font-medium text-muted-foreground mb-1">Assistant</div>
                             <div className={analysisClassName}>
-                              <Streamdown controls={controls} mode="static">
+                              <Streamdown components={markdownComponents} controls={controls} mode="static">
                                 {normalizeReportMarkdown(step.assistantText)}
                               </Streamdown>
                             </div>
