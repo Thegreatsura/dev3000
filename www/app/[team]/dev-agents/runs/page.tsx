@@ -1,8 +1,8 @@
 import type { Route } from "next"
 import { redirect } from "next/navigation"
+import { connection } from "next/server"
 
-export const dynamic = "force-dynamic"
-
-export default function TeamDevAgentRunsPage() {
+export default async function TeamDevAgentRunsPage() {
+  await connection()
   redirect("/dev-agents/runs" as Route)
 }

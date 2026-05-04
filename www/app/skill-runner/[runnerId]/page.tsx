@@ -1,12 +1,11 @@
 import type { Metadata, Route } from "next"
 import { notFound, redirect } from "next/navigation"
+import { connection } from "next/server"
 import { getCurrentUser } from "@/lib/auth"
 import { getAuthorizePath } from "@/lib/auth-redirect"
 import { DEV3000_URL } from "@/lib/constants"
 import { getDefaultSkillRunnerOpenGraphProfile } from "@/lib/skill-runners"
 import { getDefaultTeam } from "@/lib/vercel-teams"
-
-export const dynamic = "force-dynamic"
 
 function getSharePath(runnerId: string): Route {
   return `/skill-runner/${runnerId}` as Route
@@ -57,6 +56,7 @@ export async function generateMetadata({ params }: { params: Promise<{ runnerId:
 }
 
 export default async function ShareableSkillRunnerPage({ params }: { params: Promise<{ runnerId: string }> }) {
+  await connection()
   const { runnerId } = await params
   const profile = getDefaultSkillRunnerOpenGraphProfile(runnerId)
   if (!profile) {
