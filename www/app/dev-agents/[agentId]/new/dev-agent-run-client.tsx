@@ -262,7 +262,6 @@ export default function DevAgentRunClient({
     effectiveRepoVisibility === "private_or_unknown" &&
     !githubPatEnvVar?.value.trim()
   const runnerLabel = runnerKind === "skill-runner" ? "skill runner" : "dev agent"
-  const runnerTitle = runnerKind === "skill-runner" ? "Skill Runner" : "Dev Agent"
   const displayedRunCount = runStats?.runCount ?? devAgent.usageCount
   const displayedAvgCost = runStats?.avgCost ?? devAgent.avgCost
   const sharePath =
@@ -1192,7 +1191,7 @@ export default function DevAgentRunClient({
                   size="sm"
                   className="h-8 rounded-md bg-[#ededed] px-4 text-[13px] font-medium text-[#0a0a0a] hover:bg-white disabled:opacity-40"
                 >
-                  {isRunning ? `Running ${runnerTitle}…` : "Start Run"}
+                  {isRunning ? "Starting run..." : "Start Run"}
                 </Button>
               </div>
             </div>

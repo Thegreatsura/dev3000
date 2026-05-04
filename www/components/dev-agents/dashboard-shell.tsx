@@ -1,4 +1,4 @@
-import { Bot, History, Home, type LucideIcon, Settings } from "lucide-react"
+import { Bot, History, type LucideIcon, Settings } from "lucide-react"
 import type { Route } from "next"
 import Link from "next/link"
 import type React from "react"
@@ -47,32 +47,19 @@ export function DevAgentsDashboardShell({
           ? "/admin"
           : `/${selectedTeam.slug}/dev-agents`
   const sectionLabel =
-    section === "skill-runner"
-      ? "Skill Runner"
-      : section === "runs"
-        ? "Runs"
-        : section === "admin"
-          ? "Admin"
-          : "Dev Agents"
+    section === "skill-runner" ? "Skills" : section === "runs" ? "Runs" : section === "admin" ? "Admin" : "Dev Agents"
   const sidebarItems: SidebarItem[] = [
-    { label: "Overview", href: `/${selectedTeam.slug}`, icon: Home },
+    {
+      label: "Skills",
+      href: `/${selectedTeam.slug}/skill-runner`,
+      icon: Bot,
+      active: section === "skill-runner"
+    },
     {
       label: "Runs",
       href: effectiveRunsHref,
       icon: History,
       active: section === "runs"
-    },
-    {
-      label: "Dev Agents",
-      href: `/${selectedTeam.slug}/dev-agents`,
-      icon: Bot,
-      active: section === "dev-agents"
-    },
-    {
-      label: "Skill Runner",
-      href: `/${selectedTeam.slug}/skill-runner`,
-      icon: Bot,
-      active: section === "skill-runner"
     },
     ...(showAdminLink
       ? [
@@ -116,14 +103,6 @@ export function DevAgentsDashboardShell({
               })}
             </div>
           </nav>
-
-          {/* Bottom section */}
-          <div className="border-t border-[#1f1f1f] px-2 py-2">
-            <span className="flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] text-[#888]">
-              <Settings className="size-4 shrink-0" strokeWidth={1.5} />
-              <span>Settings</span>
-            </span>
-          </div>
         </aside>
 
         {/* Main content */}

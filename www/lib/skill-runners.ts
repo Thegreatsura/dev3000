@@ -108,6 +108,18 @@ const SYSTEM_AUTHOR: DevAgentAuthor = {
 
 const DEFAULT_SKILL_RUNNER_SEEDS: DefaultSkillRunnerSeed[] = [
   {
+    id: "deepsec",
+    canonicalPath: "vercel-labs/deepsec/deepsec",
+    sourceUrl: "https://github.com/vercel-labs/deepsec/tree/main/packages/deepsec",
+    installArg: DEEPSEC_SKILL_INSTALL_ARG,
+    packageName: "vercel-labs/deepsec",
+    skillName: "deepsec",
+    displayName: "DeepSec Security Scan",
+    description: DEEPSEC_DEV_AGENT_DESCRIPTION,
+    validationQuality: "high",
+    executionProfile: "deepsec"
+  },
+  {
     id: "sr_vercel-react-best-practices",
     canonicalPath: "vercel-labs/agent-skills/vercel-react-best-practices",
     sourceUrl: "https://skills.sh/vercel-labs/agent-skills/vercel-react-best-practices",
@@ -139,18 +151,6 @@ const DEFAULT_SKILL_RUNNER_SEEDS: DefaultSkillRunnerSeed[] = [
     displayName: "Next Best Practices",
     description: "Apply Next.js architecture, routing, and rendering best practices in a concrete PR.",
     validationQuality: "high"
-  },
-  {
-    id: "deepsec",
-    canonicalPath: "vercel-labs/deepsec/deepsec",
-    sourceUrl: "https://github.com/vercel-labs/deepsec/tree/main/packages/deepsec",
-    installArg: DEEPSEC_SKILL_INSTALL_ARG,
-    packageName: "vercel-labs/deepsec",
-    skillName: "deepsec",
-    displayName: "DeepSec Security Scan",
-    description: DEEPSEC_DEV_AGENT_DESCRIPTION,
-    validationQuality: "high",
-    executionProfile: "deepsec"
   },
   {
     id: "sr_seo-audit",

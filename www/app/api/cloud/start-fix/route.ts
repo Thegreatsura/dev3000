@@ -1,5 +1,6 @@
 import { getVercelOidcToken } from "@vercel/oidc"
 import { createVercelWorld } from "@workflow/world-vercel"
+import { after } from "next/server"
 import { type StartOptions, start } from "workflow/api"
 import { getCurrentUserFromRequest } from "@/lib/auth"
 import { resolveDevAgentRunner } from "@/lib/cloud/dev-agent-runner"
@@ -1096,6 +1097,7 @@ export async function POST(request: Request) {
     }
 
     if (selfHostedWorkerBaseUrl) {
+      const workerBaseUrl = selfHostedWorkerBaseUrl
       const workflowMirrorSecret = getWorkflowMirrorSecret()
       const forwardedBody =
         body && typeof body === "object"
@@ -1117,12 +1119,101 @@ export async function POST(request: Request) {
             }
           : body
 
-      return forwardSelfHostedStartRequest({
-        body: forwardedBody,
-        request,
-        accessToken,
-        workerBaseUrl: selfHostedWorkerBaseUrl
+      after(async () => {
+        try {
+          const workerResponse = await forwardSelfHostedStartRequest({
+            body: forwardedBody,
+            request,
+            accessToken,
+            workerBaseUrl
+          })
+          const workerResult = (await workerResponse.json().catch(() => null)) as {
+            success?: boolean
+            error?: string
+          } | null
+
+          if (!workerResponse.ok || workerResult?.success !== true) {
+            const errorMessage =
+              workerResult?.error ||
+              `Self-hosted worker failed to start run (${workerResponse.status} ${workerResponse.statusText}).`
+            workflowError("[Start Fix] Self-hosted worker failed to start workflow:", errorMessage)
+
+            if (userId && projectName && runId && runTimestamp) {
+              await persistWorkflowRun(
+                {
+                  id: runId,
+                  userId,
+                  projectName,
+                  timestamp: runTimestamp,
+                  status: "failure",
+                  runnerKind,
+                  type: workflowType,
+                  devAgentId: devAgent?.id,
+                  devAgentName: devAgent?.name,
+                  devAgentDescription: devAgent?.description,
+                  devAgentRevision: devAgent?.ashArtifact?.revision,
+                  devAgentSpecHash: devAgent?.ashArtifact?.specHash,
+                  devAgentExecutionMode: devAgent?.executionMode,
+                  devAgentSandboxBrowser: devAgent?.sandboxBrowser,
+                  skillRunnerCanonicalPath,
+                  skillRunnerValidationWarning,
+                  completedAt: new Date().toISOString(),
+                  error: errorMessage,
+                  customPrompt: workflowType === "prompt" ? customPrompt : undefined
+                },
+                { mirrorTarget: workflowMirrorTarget }
+              ).catch((err) => workflowError("[Start Fix] Failed to save worker startup failure metadata:", err))
+            }
+          }
+        } catch (workerStartError) {
+          workflowError("[Start Fix] Failed to contact self-hosted worker:", workerStartError)
+
+          if (userId && projectName && runId && runTimestamp) {
+            await persistWorkflowRun(
+              {
+                id: runId,
+                userId,
+                projectName,
+                timestamp: runTimestamp,
+                status: "failure",
+                runnerKind,
+                type: workflowType,
+                devAgentId: devAgent?.id,
+                devAgentName: devAgent?.name,
+                devAgentDescription: devAgent?.description,
+                devAgentRevision: devAgent?.ashArtifact?.revision,
+                devAgentSpecHash: devAgent?.ashArtifact?.specHash,
+                devAgentExecutionMode: devAgent?.executionMode,
+                devAgentSandboxBrowser: devAgent?.sandboxBrowser,
+                skillRunnerCanonicalPath,
+                skillRunnerValidationWarning,
+                completedAt: new Date().toISOString(),
+                error: workerStartError instanceof Error ? workerStartError.message : String(workerStartError),
+                customPrompt: workflowType === "prompt" ? customPrompt : undefined
+              },
+              { mirrorTarget: workflowMirrorTarget }
+            ).catch((err) => workflowError("[Start Fix] Failed to save worker contact failure metadata:", err))
+          }
+        }
       })
+
+      workflowLog(`[Start Fix] Returning immediately with self-hosted runId: ${runId}`)
+
+      return Response.json(
+        {
+          success: true,
+          message: "Workflow start requested",
+          projectName,
+          runId,
+          _debug: {
+            userId,
+            runIdGenerated: true
+          }
+        },
+        {
+          headers: corsHeaders
+        }
+      )
     }
 
     // Enqueue the workflow before returning so the request cannot finish first

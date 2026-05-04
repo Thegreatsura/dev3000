@@ -4042,10 +4042,7 @@ export async function agentFixLoopStep(
   // Observation step only guarantees skills were installed in the previous sandbox.
   // If we had to recreate the sandbox for the agent step, reinstall them.
   if (!observation || recreatedSandbox) {
-    await appendProgressLog(
-      progressContext,
-      `[Agent] Reinstalling skills in ${recreatedSandbox ? "recreated" : "initial"} agent sandbox...`
-    )
+    await appendProgressLog(progressContext, "[Agent] Preparing skills...")
     try {
       await installDevAgentSkillsInSandbox(sandbox, effectiveProjectDir, devAgentSkillRefs, progressContext, {
         devAgentAshTarballUrl,
@@ -4978,11 +4975,11 @@ async function installPackagedAshSkillsInSandbox(
 
   const output = `${result.stdout}\n${result.stderr}`.trim()
   if (result.exitCode !== 0) {
-    throw new Error(`Failed to install packaged ASH skills: ${output || "unknown error"}`)
+    throw new Error(`Failed to prepare skill files: ${output || "unknown error"}`)
   }
 
   if (output.includes("__NO_PACKAGED_SKILLS__")) {
-    await appendProgressLog(progressContext, "[Skills] No packaged ASH skills were found in the agent artifact")
+    await appendProgressLog(progressContext, "[Skills] No skill files found")
     return { installed: false, skillNames: [] }
   }
 
@@ -4992,8 +4989,16 @@ async function installPackagedAshSkillsInSandbox(
     .filter(Boolean)
     .filter((line) => !line.startsWith("__"))
 
-  if (skillNames.length > 0) {
-    await appendProgressLog(progressContext, `[Skills] Installed packaged ASH skills: ${skillNames.join(", ")}`)
+  const visibleSkillNames = skillNames
+    .filter((skillName) => skillName !== "dev3000-agent-runbook")
+    .map((skillName) => (skillName === "deepsec" ? "DeepSec" : skillName))
+
+  if (visibleSkillNames.length === 1) {
+    await appendProgressLog(progressContext, `[Skills] Loaded ${visibleSkillNames[0]} skill`)
+  } else if (visibleSkillNames.length > 1) {
+    await appendProgressLog(progressContext, `[Skills] Loaded skills: ${visibleSkillNames.join(", ")}`)
+  } else if (skillNames.length > 0) {
+    await appendProgressLog(progressContext, "[Skills] Loaded skill instructions")
   }
 
   return { installed: skillNames.length > 0, skillNames }
@@ -5119,7 +5124,7 @@ async function installPackagedAshAppInSandbox(
     throw new Error(`Failed to install packaged ASH app: ${output || "unknown error"}`)
   }
 
-  await appendProgressLog(progressContext, `[ASH] Installed packaged app at ${appRoot}`)
+  await appendProgressLog(progressContext, "[Agent] Prepared analysis runner")
   return { appRoot }
 }
 
@@ -5140,7 +5145,7 @@ async function waitForAshRuntimeReady(
         headers: { authorization, "cache-control": "no-store" }
       })
       if (response.ok) {
-        await appendProgressLog(progressContext, `[ASH] Runtime healthy at ${baseUrl}`)
+        await appendProgressLog(progressContext, "[Agent] Analysis runner ready")
         return baseUrl
       }
     } catch (error) {
@@ -5158,7 +5163,7 @@ async function waitForAshRuntimeReady(
       })
       runtimeLogPreview = formatClaudeOutputPreview(logResult.stdout || logResult.stderr, 1200)
       if (runtimeLogPreview && runtimeLogPreview !== "<empty>") {
-        await appendProgressLog(progressContext, `[ASH] Runtime log before timeout: ${runtimeLogPreview}`)
+        await appendProgressLog(progressContext, `[Agent] Setup log before timeout: ${runtimeLogPreview}`)
       }
     } catch (error) {
       runtimeLogPreview = `failed to read log: ${error instanceof Error ? error.message : String(error)}`
@@ -5186,7 +5191,7 @@ async function ensurePackagedAshRuntimeInSandbox(
   const logPath = `${ASH_RUNTIME_LOG_DIR}/ash-runtime.log`
   const workflowDataDir = `${ASH_RUNTIME_ROOT}/workflow-data/${runtimeRunKey.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
-  await appendProgressLog(progressContext, `[ASH] Starting built runtime on port ${ASH_RUNTIME_PORT}...`)
+  await appendProgressLog(progressContext, "[Agent] Starting analysis runner...")
   await sandbox.runCommand({
     cmd: "sh",
     args: [
@@ -5366,7 +5371,10 @@ async function collectAshRuntimeDiagnostics({
     9000
   )
 
-  await appendProgressLog(progressContext, `[ASH] Runtime diagnostics: ${formatClaudeOutputPreview(diagnostics, 1800)}`)
+  await appendProgressLog(
+    progressContext,
+    `[Agent] Analysis runner diagnostics: ${formatClaudeOutputPreview(diagnostics, 1800)}`
+  )
 
   return diagnostics
 }
@@ -5463,10 +5471,10 @@ async function readAshRuntimeSessionStream(
     if (details) {
       await appendProgressLog(
         progressContext,
-        `[ASH] ${summary} diagnostics=${formatClaudeOutputPreview(details, 1800)}`
+        `[Agent] ${summary} diagnostics=${formatClaudeOutputPreview(details, 1800)}`
       )
     } else {
-      await appendProgressLog(progressContext, `[ASH] ${summary}`)
+      await appendProgressLog(progressContext, `[Agent] ${summary}`)
     }
 
     return new Error(details ? `${summary}\n\n${details}` : summary)
@@ -5781,7 +5789,7 @@ async function streamAshRuntimeTask(
   if (!sessionId) {
     throw new Error("ASH runtime task route did not return a session id.")
   }
-  await appendProgressLog(progressContext, `[ASH] Session started: ${sessionId}`)
+  await appendProgressLog(progressContext, "[Agent] Analysis session started")
   const streamResult = await readAshRuntimeSessionStream(
     baseUrl,
     authorization,
@@ -5894,7 +5902,7 @@ async function runAshAgentInSandbox(
   const transcript: string[] = []
   transcript.push("## ASH Runtime Session")
   transcript.push("")
-  await appendProgressLog(progressContext, `[ASH] Task run: ${taskPrompt.prompt.slice(0, 120)}`)
+  await appendProgressLog(progressContext, "[Agent] Analysis started")
   const diagnostics: AshRuntimeDiagnostics = (sessionId) =>
     collectAshRuntimeDiagnostics({
       authorization,
@@ -6012,10 +6020,6 @@ async function installDevAgentSkillsInSandbox(
 
     const normalizedSkillName = normalizeInstalledSkillName(skill.skillName || skill.displayName || skill.id)
     if (normalizedSkillName && packagedSkillNames.has(normalizedSkillName)) {
-      await appendProgressLog(
-        progressContext,
-        `[Skills] ${skill.displayName} already available from packaged ASH skills`
-      )
       installedSkillNames.add(skill.displayName || skill.skillName || skill.id)
       continue
     }
@@ -7668,15 +7672,12 @@ async function runAgentWithDiagnoseTool(
     })
 
   if (gatewayAuthSource) {
-    await appendProgressLog(
-      progressContext,
-      `[${devAgentAshTarballUrl ? "ASH" : "Claude"}] Gateway auth source: ${gatewayAuthSource}`
-    )
+    await appendProgressLog(progressContext, "[Agent] AI Gateway connected")
   }
 
   if (devAgentAshTarballUrl) {
     try {
-      await appendProgressLog(progressContext, "[ASH] Executing packaged ASH runtime path...")
+      await appendProgressLog(progressContext, `[Agent] Starting ${devAgentName || "agent"}...`)
       return await runAshAgentInSandbox(
         sandbox,
         devUrl,
@@ -7703,7 +7704,7 @@ async function runAgentWithDiagnoseTool(
     } catch (ashRuntimeError) {
       await appendProgressLog(
         progressContext,
-        `[ASH] Runtime path failed; aborting without Claude CLI fallback: ${ashRuntimeError instanceof Error ? ashRuntimeError.message : String(ashRuntimeError)}`
+        `[Agent] Analysis runner failed: ${ashRuntimeError instanceof Error ? ashRuntimeError.message : String(ashRuntimeError)}`
       )
       throw ashRuntimeError
     }

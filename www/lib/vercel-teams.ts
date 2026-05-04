@@ -201,22 +201,19 @@ export async function listCurrentUserTeams(): Promise<VercelTeam[]> {
         })()
 
   const teams: VercelTeam[] = []
-  if (personalTeam) {
-    teams.push(personalTeam)
-  }
+  const seenTeamIds = new Set<string>()
+  const seenTeamSlugs = new Set<string>()
 
   for (const team of fetchedTeams) {
     if (!team.id || !team.slug || !team.name) continue
-    if (
-      teams.some(
-        (existingTeam) =>
-          existingTeam.id.toLowerCase() === team.id?.toLowerCase() ||
-          existingTeam.slug.toLowerCase() === team.slug?.toLowerCase()
-      )
-    ) {
+    const normalizedId = team.id.toLowerCase()
+    const normalizedSlug = team.slug.toLowerCase()
+    if (seenTeamIds.has(normalizedId) || seenTeamSlugs.has(normalizedSlug)) {
       continue
     }
 
+    seenTeamIds.add(normalizedId)
+    seenTeamSlugs.add(normalizedSlug)
     teams.push({
       id: team.id,
       slug: team.slug,
@@ -225,6 +222,14 @@ export async function listCurrentUserTeams(): Promise<VercelTeam[]> {
       avatarUrl: pickAvatarUrl(team),
       planLabel: normalizePlanLabel(team.plan || team.billing?.plan)
     })
+  }
+
+  if (personalTeam) {
+    const normalizedPersonalId = personalTeam.id.toLowerCase()
+    const normalizedPersonalSlug = personalTeam.slug.toLowerCase()
+    if (!seenTeamIds.has(normalizedPersonalId) && !seenTeamSlugs.has(normalizedPersonalSlug)) {
+      teams.push(personalTeam)
+    }
   }
 
   teams.sort((a, b) => {
