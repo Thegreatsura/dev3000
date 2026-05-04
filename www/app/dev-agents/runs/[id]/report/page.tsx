@@ -658,11 +658,91 @@ function getGeneratedReportCost(markdown: string): string | null {
   return null
 }
 
+function extractGeneratedReportSection(markdown: string, headingPattern: RegExp): string {
+  const lines = markdown.split("\n")
+  const headingIndex = lines.findIndex((line) => {
+    const headingMatch = line.match(/^(#{2,6})\s+(.+?)\s*$/)
+    return headingMatch ? headingPattern.test(headingMatch[2]) : false
+  })
+  if (headingIndex < 0) return ""
+
+  const headingLevel = lines[headingIndex].match(/^(#{2,6})\s+/)?.[1].length ?? 2
+  const endIndex = lines.findIndex((line, index) => {
+    if (index <= headingIndex) return false
+    const headingMatch = line.match(/^(#{2,6})\s+/)
+    return headingMatch ? headingMatch[1].length <= headingLevel : false
+  })
+
+  return lines
+    .slice(headingIndex + 1, endIndex < 0 ? undefined : endIndex)
+    .join("\n")
+    .trim()
+}
+
+function moveGeneratedReportSectionToTop(markdown: string, headingPattern: RegExp): string {
+  const lines = markdown.split("\n")
+  const headingIndex = lines.findIndex((line) => {
+    const headingMatch = line.match(/^(#{2,6})\s+(.+?)\s*$/)
+    return headingMatch ? headingPattern.test(headingMatch[2]) : false
+  })
+  if (headingIndex <= 0) return markdown
+
+  const headingLevel = lines[headingIndex].match(/^(#{2,6})\s+/)?.[1].length ?? 2
+  const endIndex = lines.findIndex((line, index) => {
+    if (index <= headingIndex) return false
+    const headingMatch = line.match(/^(#{2,6})\s+/)
+    return headingMatch ? headingMatch[1].length <= headingLevel : false
+  })
+  const sectionEndIndex = endIndex < 0 ? lines.length : endIndex
+  const prioritizedSection = lines.slice(headingIndex, sectionEndIndex)
+  const remainingSections = [...lines.slice(0, headingIndex), ...lines.slice(sectionEndIndex)]
+
+  return [...prioritizedSection, "", ...remainingSections]
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+interface GeneratedReportScanScope {
+  filesScanned?: string
+  filesAnalyzed?: string
+  processing?: string
+  model?: string
+}
+
+function getGeneratedReportScanScope(markdown: string): GeneratedReportScanScope {
+  const scopeSection = extractGeneratedReportSection(markdown.replace(/```[\s\S]*?```/g, ""), /^Scan Scope$/i)
+  const scope: GeneratedReportScanScope = {}
+
+  for (const rawLine of scopeSection.split("\n")) {
+    const line = rawLine
+      .replace(/^[-*]\s+/, "")
+      .replace(/\*\*/g, "")
+      .trim()
+    const match = line.match(/^([^:]+):\s*(.+)$/)
+    if (!match) continue
+
+    const label = match[1].trim().toLowerCase()
+    const value = match[2].trim()
+    if (label === "files scanned") scope.filesScanned = value
+    if (label === "files analyzed") scope.filesAnalyzed = value
+    if (label === "processing") scope.processing = value
+    if (label === "model") scope.model = value
+  }
+
+  return scope
+}
+
 function stripGeneratedReportWebOnlySections(markdown: string): string {
   const lines = markdown.split("\n")
   const output: string[] = []
   let skippedHeadingLevel: number | null = null
-  const hiddenSectionHeadings = [/^Report Location$/i, /^Next Steps\s*[—–-]\s*Full Scan$/i, /^Git Safety$/i]
+  const hiddenSectionHeadings = [
+    /^Report Location$/i,
+    /^Scan Scope$/i,
+    /^Next Steps\s*[—–-]\s*Full Scan$/i,
+    /^Git Safety$/i
+  ]
 
   for (const line of lines) {
     const headingMatch = line.match(/^(#{2,6})\s+(.+?)\s*$/)
@@ -1440,8 +1520,14 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
     stripGeneratedReportWebOnlySections(generatedReportMarkdown)
   )
   const generatedReportDisplay = extractLeadingReportHeading(generatedReportWebMarkdown)
+  const generatedReportBody =
+    workflowType === "deepsec-security-scan"
+      ? moveGeneratedReportSectionToTop(generatedReportDisplay.body, /^Findings:/i)
+      : generatedReportDisplay.body
   const generatedReportCost =
     workflowType === "deepsec-security-scan" ? getGeneratedReportCost(generatedReportMarkdown) : null
+  const generatedReportScanScope =
+    workflowType === "deepsec-security-scan" ? getGeneratedReportScanScope(generatedReportMarkdown) : {}
   const costValue =
     generatedReportCost ?? (typeof report.costUsd === "number" ? formatUsd(report.costUsd) : "Not reported")
   const costDetail =
@@ -1450,6 +1536,8 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
       : typeof report.costUsd === "number"
         ? undefined
         : "No cost data recorded for this run"
+  const modelValue = generatedReportScanScope.model || report.agentAnalysisModel || "unknown"
+  const modelDetail = generatedReportScanScope.model ? "From generated DeepSec report" : undefined
   const effectiveSuccessEvalResult =
     workflowType === "deepsec-security-scan" && generatedReportMarkdown ? true : report.successEvalResult
   const successEvalText =
@@ -1685,7 +1773,7 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
       {workflowType === "deepsec-security-scan" && generatedReportMarkdown ? (
         <GeneratedReportSection>
           <AgentAnalysis
-            content={generatedReportDisplay.body}
+            content={generatedReportBody}
             controls={{
               code: { copy: false, download: false },
               table: { copy: true, download: false, fullscreen: false },
@@ -1702,7 +1790,16 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
       <ReportSection title="Run Context" description="Compact run metadata and environment details.">
         <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
           <SummaryItem label="Cost" value={costValue} detail={costDetail} />
-          {!isMarketplaceAgent ? <SummaryItem label="Model" value={report.agentAnalysisModel || "unknown"} /> : null}
+          {!isMarketplaceAgent ? <SummaryItem label="Model" value={modelValue} detail={modelDetail} /> : null}
+          {generatedReportScanScope.filesScanned ? (
+            <SummaryItem label="Files scanned" value={generatedReportScanScope.filesScanned} />
+          ) : null}
+          {generatedReportScanScope.filesAnalyzed ? (
+            <SummaryItem label="Files analyzed" value={generatedReportScanScope.filesAnalyzed} />
+          ) : null}
+          {generatedReportScanScope.processing ? (
+            <SummaryItem label="Processing" value={generatedReportScanScope.processing} />
+          ) : null}
           {!isMarketplaceAgent && report.devAgentRevision ? (
             <SummaryItem
               label="Agent Version"
