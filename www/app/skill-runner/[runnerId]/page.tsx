@@ -6,6 +6,8 @@ import { DEV3000_URL } from "@/lib/constants"
 import { getDefaultSkillRunnerOpenGraphProfile } from "@/lib/skill-runners"
 import { getDefaultTeam } from "@/lib/vercel-teams"
 
+export const dynamic = "force-dynamic"
+
 function getSharePath(runnerId: string): Route {
   return `/skill-runner/${runnerId}` as Route
 }
