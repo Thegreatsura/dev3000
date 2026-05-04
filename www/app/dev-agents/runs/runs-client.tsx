@@ -22,6 +22,7 @@ import type { WorkflowRun } from "@/lib/workflow-storage"
 interface DevAgentRunsClientProps {
   userId: string
   initialRuns: WorkflowRun[]
+  teamSlug?: string
 }
 
 type DisplayRunStatus = WorkflowRun["status"] | "stalled"
@@ -70,8 +71,9 @@ function formatDevAgentLabel(run: WorkflowRun): string {
   return run.devAgentName || formatLegacyWorkflowType(run.type)
 }
 
-function getRunReportHref(run: WorkflowRun): Route {
-  const basePath = run.runnerKind === "skill-runner" ? "/skill-runner/runs" : "/dev-agents/runs"
+function getRunReportHref(run: WorkflowRun, teamSlug?: string): Route {
+  const section = run.runnerKind === "skill-runner" ? "skill-runner" : "dev-agents"
+  const basePath = teamSlug ? `/${teamSlug}/${section}/runs` : `/${section}/runs`
   return `${basePath}/${run.id}/report` as Route
 }
 
@@ -124,7 +126,7 @@ function formatUsd(value?: number): string {
   }).format(value)
 }
 
-export default function DevAgentRunsClient({ userId, initialRuns }: DevAgentRunsClientProps) {
+export default function DevAgentRunsClient({ userId, initialRuns, teamSlug }: DevAgentRunsClientProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -279,7 +281,10 @@ export default function DevAgentRunsClient({ userId, initialRuns }: DevAgentRuns
                       />
                     </TableCell>
                     <TableCell>
-                      <Link href={getRunReportHref(run)} className="font-medium text-[#ededed] hover:underline">
+                      <Link
+                        href={getRunReportHref(run, teamSlug)}
+                        className="font-medium text-[#ededed] hover:underline"
+                      >
                         {formatDevAgentLabel(run)}
                       </Link>
                     </TableCell>

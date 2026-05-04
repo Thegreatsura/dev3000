@@ -8,7 +8,12 @@
 
 import { Sandbox } from "@vercel/sandbox"
 import { generateText } from "ai"
-import { createVercelGateway, getAiGatewayAuthSource, requireAiGatewayAuthToken } from "@/lib/ai-gateway"
+import {
+  createVercelGateway,
+  getAiGatewayAuthSource,
+  isOidcAiGatewayAuthSource,
+  requireAiGatewayAuthToken
+} from "@/lib/ai-gateway"
 import { putBlobAndBuildUrl, readBlobJson } from "@/lib/blob-store"
 import { D3K_ASH_RUNTIME_PORT, getOrCreateD3kSandbox, type SandboxTimingData, StepTimer } from "@/lib/cloud/d3k-sandbox"
 import { SandboxAgentBrowser } from "@/lib/cloud/sandbox-agent-browser"
@@ -3657,7 +3662,7 @@ export async function evaluateEarlyExitStep(
   earlyExitRule: DevAgentEarlyExitRule | undefined,
   observation: ObserveResult,
   gatewayAuthToken?: string,
-  _gatewayAuthSource?: string,
+  gatewayAuthSource?: string,
   progressContext?: ProgressContext | null
 ): Promise<{ shouldExit: boolean; reason: string }> {
   if (!earlyExitRule && !earlyExitEval?.trim()) {
@@ -3684,7 +3689,7 @@ export async function evaluateEarlyExitStep(
     workflowLog(`[EarlyExit] Evaluating condition: "${earlyExitEval}"`)
     await appendProgressLog(progressContext, `[EarlyExit] Evaluating: "${earlyExitEval}"`)
 
-    const gateway = createVercelGateway(gatewayAuthToken)
+    const gateway = createVercelGateway(gatewayAuthToken, gatewayAuthSource)
 
     const metricsContext = [
       `CLS score: ${observation.beforeCls !== null ? observation.beforeCls.toFixed(4) : "unavailable"}`,
@@ -4430,7 +4435,7 @@ export async function agentFixLoopStep(
     try {
       timer.start("Success eval")
       workflowLog(`[Agent] Running success eval with ${SUCCESS_EVAL_MODEL}`)
-      const evalGateway = createVercelGateway(gatewayAuthToken)
+      const evalGateway = createVercelGateway(gatewayAuthToken, gatewayAuthSource)
       const evalResult = await generateText({
         model: evalGateway(SUCCESS_EVAL_MODEL),
         system:
@@ -4629,7 +4634,7 @@ export async function urlAuditStep(
   projectName: string,
   reportId: string,
   gatewayAuthToken?: string,
-  _gatewayAuthSource?: string,
+  gatewayAuthSource?: string,
   progressContext?: ProgressContext | null,
   initTiming?: InitStepTiming,
   fromSnapshot?: boolean,
@@ -4716,7 +4721,7 @@ export async function urlAuditStep(
   }
 
   timer.start("Generate audit analysis")
-  const gateway = createVercelGateway(gatewayAuthToken)
+  const gateway = createVercelGateway(gatewayAuthToken, gatewayAuthSource)
 
   const analysisResponse = await generateText({
     model: gateway("openai/gpt-5.4"),
@@ -4866,6 +4871,44 @@ Constraints:
 
 function shellEscape(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+function buildAiGatewayShellExports(gatewayAuthToken: string | undefined, gatewayAuthSource: string | undefined) {
+  if (!gatewayAuthToken) return []
+
+  const escapedToken = shellEscape(gatewayAuthToken)
+  const commonExports = [
+    `export ANTHROPIC_AUTH_TOKEN=${escapedToken}`,
+    `export OPENAI_API_KEY=${escapedToken}`,
+    "export ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh",
+    "export OPENAI_BASE_URL=https://ai-gateway.vercel.sh/v1"
+  ]
+
+  if (isOidcAiGatewayAuthSource(gatewayAuthSource)) {
+    return [`export VERCEL_OIDC_TOKEN=${escapedToken}`, "unset AI_GATEWAY_API_KEY", ...commonExports]
+  }
+
+  return [`export AI_GATEWAY_API_KEY=${escapedToken}`, "unset VERCEL_OIDC_TOKEN", ...commonExports]
+}
+
+function buildClaudeAiGatewayEnv(gatewayAuthToken: string, gatewayAuthSource: string): Record<string, string> {
+  const baseEnv = {
+    ANTHROPIC_BASE_URL: "https://ai-gateway.vercel.sh",
+    ANTHROPIC_AUTH_TOKEN: gatewayAuthToken,
+    ANTHROPIC_API_KEY: ""
+  }
+
+  if (isOidcAiGatewayAuthSource(gatewayAuthSource)) {
+    return {
+      ...baseEnv,
+      VERCEL_OIDC_TOKEN: gatewayAuthToken
+    }
+  }
+
+  return {
+    ...baseEnv,
+    AI_GATEWAY_API_KEY: gatewayAuthToken
+  }
 }
 
 function getInstalledSkillNames(
@@ -5133,6 +5176,7 @@ async function ensurePackagedAshRuntimeInSandbox(
   specHash: string | undefined,
   projectRoot: string,
   gatewayAuthToken: string | undefined,
+  gatewayAuthSource: string | undefined,
   progressContext?: ProgressContext | null
 ): Promise<{ authorization: string; baseUrl: string; logPath: string; workflowDataDir: string }> {
   const { appRoot } = await installPackagedAshAppInSandbox(sandbox, tarballUrl, specHash, progressContext)
@@ -5162,12 +5206,7 @@ async function ensurePackagedAshRuntimeInSandbox(
         `export DEV3000_ASH_RUNTIME_USERNAME=${shellEscape(ASH_RUNTIME_USERNAME)}`,
         `export DEV3000_ASH_RUNTIME_PASSWORD=${shellEscape(runtimePassword)}`,
         `export DEV3000_PROJECT_ROOT=${shellEscape(projectRoot)}`,
-        gatewayAuthToken ? `export VERCEL_OIDC_TOKEN=${shellEscape(gatewayAuthToken)}` : null,
-        gatewayAuthToken ? `export AI_GATEWAY_API_KEY=${shellEscape(gatewayAuthToken)}` : null,
-        gatewayAuthToken ? `export ANTHROPIC_AUTH_TOKEN=${shellEscape(gatewayAuthToken)}` : null,
-        gatewayAuthToken ? `export OPENAI_API_KEY=${shellEscape(gatewayAuthToken)}` : null,
-        gatewayAuthToken ? "export ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh" : null,
-        gatewayAuthToken ? "export OPENAI_BASE_URL=https://ai-gateway.vercel.sh/v1" : null,
+        ...buildAiGatewayShellExports(gatewayAuthToken, gatewayAuthSource),
         `export PORT=${ASH_RUNTIME_PORT}`,
         "export HOST=0.0.0.0",
         "export HOSTNAME=0.0.0.0",
@@ -5811,6 +5850,7 @@ async function runAshAgentInSandbox(
     progressContext?.devAgentSpecHash,
     effectiveProjectRoot,
     gatewayAuthToken,
+    gatewayAuthSource,
     progressContext
   )
   const workflowTypeForPrompt = workflowType || "cls-fix"
@@ -7456,10 +7496,7 @@ async function runClaudeTurnInSandbox(
 
   const claudeEnv = {
     PATH: pathEnv,
-    ANTHROPIC_BASE_URL: "https://ai-gateway.vercel.sh",
-    ANTHROPIC_AUTH_TOKEN: gatewayAuthToken,
-    AI_GATEWAY_API_KEY: gatewayAuthToken,
-    ANTHROPIC_API_KEY: "",
+    ...buildClaudeAiGatewayEnv(gatewayAuthToken, gatewayAuthSource),
     // Claude Code can send experimental beta headers that Anthropic-format
     // gateways backed by Bedrock/Vertex may reject with 400s.
     CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
@@ -7469,7 +7506,7 @@ async function runClaudeTurnInSandbox(
   await logClaudeCliDiagnostics(sandbox, pathEnv, options.progressContext)
   await appendProgressLog(
     options.progressContext,
-    `[Claude] Running ${prompt.label} (model=${modelSelection.cliModel}, resume=${options.sessionId ? "yes" : "no"}, authToken=present:${gatewayAuthSource}, aiGatewayApiKey=present:${gatewayAuthSource}, baseUrl=${claudeEnv.ANTHROPIC_BASE_URL}, cmd=${invocation.cmd}, cli=${invocation.description}, extraEnv=${Object.keys(modelSelection.extraEnv).join(",") || "none"})`
+    `[Claude] Running ${prompt.label} (model=${modelSelection.cliModel}, resume=${options.sessionId ? "yes" : "no"}, authToken=present:${gatewayAuthSource}, aiGatewayApiKey=${isOidcAiGatewayAuthSource(gatewayAuthSource) ? "unset:oidc" : `present:${gatewayAuthSource}`}, baseUrl=https://ai-gateway.vercel.sh, cmd=${invocation.cmd}, cli=${invocation.description}, extraEnv=${Object.keys(modelSelection.extraEnv).join(",") || "none"})`
   )
 
   const startedAt = Date.now()

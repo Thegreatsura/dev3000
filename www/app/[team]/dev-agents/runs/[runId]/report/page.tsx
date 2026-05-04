@@ -1,10 +1,11 @@
-import { redirect } from "next/navigation"
+import { WorkflowReportRoute } from "@/app/dev-agents/runs/[id]/report/page"
 
-export default async function LegacyTeamRunReportPage({
+export default async function TeamDevAgentRunReportPage({
   params
 }: {
   params: Promise<{ team: string; runId: string }>
 }) {
-  const { runId } = await params
-  redirect(`/dev-agents/runs/${runId}/report`)
+  const { team, runId } = await params
+
+  return <WorkflowReportRoute params={Promise.resolve({ id: runId })} routeKind="dev-agent" teamSlug={team} />
 }

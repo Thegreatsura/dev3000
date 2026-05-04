@@ -543,8 +543,7 @@ export async function POST(request: Request) {
         : "control-plane-vercel-token"
     // Keep AI Gateway billing aligned with the execution host: hosted runs use
     // the control-plane project, self-hosted skill-runners use the worker project.
-    const hostedGatewayAuthToken =
-      controlPlaneAiGatewayApiKey || runtimeOidcToken || fallbackVercelToken || vercelApiToken
+    const hostedGatewayAuthToken = controlPlaneAiGatewayApiKey || runtimeOidcToken
     const gatewayAuthToken = isSelfHostedWorker ? workerOidcAuth.token : hostedGatewayAuthToken
     const gatewayAuthSource: WorkflowAuthSource = !gatewayAuthToken
       ? "missing"
@@ -562,6 +561,11 @@ export async function POST(request: Request) {
     if (isSelfHostedWorker && !workflowWorldToken) {
       throw new Error(
         "Self-hosted runner cannot start Workflow without a Vercel OIDC token. Enable Secure Backend Access with OIDC Federation on the runner project."
+      )
+    }
+    if (isSelfHostedWorker && !workerOidcAuth.token) {
+      throw new Error(
+        "Self-hosted runner cannot authenticate AI Gateway without a Vercel OIDC token. Enable Secure Backend Access with OIDC Federation on the runner project, then redeploy it."
       )
     }
 

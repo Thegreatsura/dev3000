@@ -1,8 +1,6 @@
-import type { Route } from "next"
-import { redirect } from "next/navigation"
-import { connection } from "next/server"
+import { WorkflowRunsPage } from "@/app/dev-agents/runs/page"
 
-export default async function TeamSkillRunnerRunsPage() {
-  await connection()
-  redirect("/skill-runner/runs" as Route)
+export default async function TeamSkillRunnerRunsPage({ params }: { params: Promise<{ team: string }> }) {
+  const { team } = await params
+  return <WorkflowRunsPage routeKind="skill-runner" teamSlug={team} />
 }

@@ -789,7 +789,10 @@ export default function DevAgentRunClient({
       return
     }
 
-    const reportBasePath = runnerKind === "skill-runner" ? "/skill-runner/runs" : "/dev-agents/runs"
+    const reportBasePath =
+      runnerKind === "skill-runner"
+        ? `/${selectedTeam.slug}/skill-runner/runs`
+        : `/${selectedTeam.slug}/dev-agents/runs`
     window.location.href = `${reportBasePath}/${result.runId}/report`
   }
 

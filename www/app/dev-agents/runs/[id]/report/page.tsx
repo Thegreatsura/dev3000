@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { getCurrentUser } from "@/lib/auth"
 import { getSignInPath } from "@/lib/auth-redirect"
 import { readBlobJson } from "@/lib/blob-store"
-import { getDefaultDevAgentsRouteContext } from "@/lib/dev-agents-route"
+import { getDefaultDevAgentsRouteContext, getDevAgentsRouteContext } from "@/lib/dev-agents-route"
 import {
   getFinalSummaryMarkdown,
   getGeneratedReportCostUsd,
@@ -32,12 +32,13 @@ function getReportRouteKind(run: Pick<WorkflowRun, "runnerKind">): ReportRouteKi
   return run.runnerKind === "skill-runner" ? "skill-runner" : "dev-agent"
 }
 
-function getRunsPath(kind: ReportRouteKind): string {
-  return kind === "skill-runner" ? "/skill-runner/runs" : "/dev-agents/runs"
+function getRunsPath(kind: ReportRouteKind, teamSlug?: string): string {
+  const section = kind === "skill-runner" ? "skill-runner" : "dev-agents"
+  return teamSlug ? `/${teamSlug}/${section}/runs` : `/${section}/runs`
 }
 
-function getReportPath(id: string, kind: ReportRouteKind): string {
-  return `${getRunsPath(kind)}/${id}/report`
+function getReportPath(id: string, kind: ReportRouteKind, teamSlug?: string): string {
+  return `${getRunsPath(kind, teamSlug)}/${id}/report`
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
@@ -1177,28 +1178,33 @@ export default function WorkflowReportPage({ params }: { params: Promise<{ id: s
 
 export function WorkflowReportRoute({
   params,
-  routeKind
+  routeKind,
+  teamSlug
 }: {
   params: Promise<{ id: string }>
   routeKind: ReportRouteKind
+  teamSlug?: string | Promise<string>
 }) {
   return (
     <Suspense fallback={<ReportLoading />}>
-      <WorkflowReportPageData params={params} routeKind={routeKind} />
+      <WorkflowReportPageData params={params} routeKind={routeKind} teamSlug={teamSlug} />
     </Suspense>
   )
 }
 
 async function WorkflowReportPageData({
   params,
-  routeKind
+  routeKind,
+  teamSlug
 }: {
   params: Promise<{ id: string }>
   routeKind: ReportRouteKind
+  teamSlug?: string | Promise<string>
 }) {
   const user = await getCurrentUser()
   const { id } = await params
-  const requestedReportPath = getReportPath(id, routeKind)
+  const requestedTeamSlug = typeof teamSlug === "string" ? teamSlug : teamSlug ? await teamSlug : undefined
+  const requestedReportPath = getReportPath(id, routeKind, requestedTeamSlug)
 
   let run = user ? await getWorkflowRun(user.id, id) : null
   let isOwner = false
@@ -1215,16 +1221,23 @@ async function WorkflowReportPageData({
   }
 
   if (!run) {
-    redirect(getRunsPath(routeKind) as Route)
+    redirect(getRunsPath(routeKind, requestedTeamSlug) as Route)
   }
 
   const canonicalRouteKind = getReportRouteKind(run)
   if (canonicalRouteKind !== routeKind) {
-    redirect(getReportPath(id, canonicalRouteKind) as Route)
+    redirect(getReportPath(id, canonicalRouteKind, requestedTeamSlug) as Route)
   }
 
-  const ownerRouteContext = isOwner ? await getDefaultDevAgentsRouteContext() : null
+  const ownerRouteContext = isOwner
+    ? requestedTeamSlug
+      ? await getDevAgentsRouteContext(requestedTeamSlug)
+      : await getDefaultDevAgentsRouteContext()
+    : null
   const canUseDashboardShell = Boolean(ownerRouteContext?.selectedTeam)
+  const selectedRouteTeamSlug =
+    ownerRouteContext?.selectedTeam && requestedTeamSlug ? ownerRouteContext.selectedTeam.slug : undefined
+  const runsPath = getRunsPath(canonicalRouteKind, selectedRouteTeamSlug)
 
   if (!run.reportBlobUrl && run.status === "failure") {
     const workflowLabel = run.devAgentName || (run.runnerKind === "skill-runner" ? "Skill Runner" : "Dev Agent")
@@ -1281,7 +1294,7 @@ async function WorkflowReportPageData({
           teams={ownerRouteContext.teams}
           selectedTeam={ownerRouteContext.selectedTeam}
           section="runs"
-          runsHref={getRunsPath(canonicalRouteKind)}
+          runsHref={runsPath}
           title={run.projectName}
           subtitle="Run failed"
         >
@@ -1312,7 +1325,7 @@ async function WorkflowReportPageData({
           teams={ownerRouteContext.teams}
           selectedTeam={ownerRouteContext.selectedTeam}
           section="runs"
-          runsHref={getRunsPath(canonicalRouteKind)}
+          runsHref={runsPath}
           title={run.projectName}
           subtitle="Run in progress"
         >
@@ -1348,7 +1361,7 @@ async function WorkflowReportPageData({
           teams={ownerRouteContext.teams}
           selectedTeam={ownerRouteContext.selectedTeam}
           section="runs"
-          runsHref={getRunsPath(canonicalRouteKind)}
+          runsHref={runsPath}
           title={run.projectName}
           subtitle="Report unavailable"
         >
@@ -1437,7 +1450,7 @@ async function WorkflowReportPageData({
     </>
   )
 
-  const reportBody = <ReportContentBody run={run} report={report} />
+  const reportBody = <ReportContentBody run={run} report={report} runsHref={runsPath} />
 
   if (canUseDashboardShell && ownerRouteContext?.selectedTeam) {
     return (
@@ -1445,7 +1458,7 @@ async function WorkflowReportPageData({
         teams={ownerRouteContext.teams}
         selectedTeam={ownerRouteContext.selectedTeam}
         section="runs"
-        runsHref={getRunsPath(canonicalRouteKind)}
+        runsHref={runsPath}
         title={primaryHeading}
         subtitle={projectSubtitle}
         description={reportDescription}
@@ -1469,9 +1482,8 @@ async function WorkflowReportPageData({
   )
 }
 
-function ReportContentBody({ run, report }: { run: WorkflowRun; report: WorkflowReport }) {
+function ReportContentBody({ run, report, runsHref }: { run: WorkflowRun; report: WorkflowReport; runsHref: string }) {
   const workflowType = report.workflowType || run.type || "cls-fix"
-  const runsHref = getRunsPath(getReportRouteKind(run))
   const generatedReportMarkdown = getGeneratedReportMarkdown(report)
   const generatedReportWebMarkdown = stripGeneratedReportCodeFenceLabels(
     stripGeneratedReportWebOnlySections(generatedReportMarkdown)

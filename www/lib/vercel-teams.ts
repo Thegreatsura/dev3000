@@ -245,11 +245,17 @@ export async function getPreferredTeam(teams: VercelTeam[]): Promise<VercelTeam 
   const lastSelectedTeam = cookieStore.get(LAST_SELECTED_TEAM_COOKIE_NAME)?.value?.trim().toLowerCase()
   if (lastSelectedTeam) {
     const preferredTeam =
-      teams.find((team) => team.slug.toLowerCase() === lastSelectedTeam) ||
-      teams.find((team) => team.id.toLowerCase() === lastSelectedTeam)
+      teams.find((team) => team.id.toLowerCase() === lastSelectedTeam) ||
+      teams.find((team) => !team.isPersonal && team.slug.toLowerCase() === lastSelectedTeam) ||
+      teams.find((team) => team.slug.toLowerCase() === lastSelectedTeam)
     if (preferredTeam) {
       return preferredTeam
     }
+  }
+
+  const firstOrganizationTeam = teams.find((team) => !team.isPersonal)
+  if (firstOrganizationTeam) {
+    return firstOrganizationTeam
   }
 
   return teams[0] ?? null
@@ -267,8 +273,9 @@ export async function resolveTeamFromParam(teamParam: string): Promise<{
   const teams = await listCurrentUserTeams()
   const normalizedTeamParam = teamParam.trim().toLowerCase()
   const selectedTeam =
-    teams.find((team) => team.slug.toLowerCase() === normalizedTeamParam) ||
     teams.find((team) => team.id.toLowerCase() === normalizedTeamParam) ||
+    teams.find((team) => !team.isPersonal && team.slug.toLowerCase() === normalizedTeamParam) ||
+    teams.find((team) => team.slug.toLowerCase() === normalizedTeamParam) ||
     null
 
   return { selectedTeam, teams }
