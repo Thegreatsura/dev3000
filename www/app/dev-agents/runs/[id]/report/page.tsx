@@ -663,6 +663,25 @@ function stripGeneratedReportWebOnlySections(markdown: string): string {
   return output.join("\n").trim()
 }
 
+function extractLeadingReportHeading(markdown: string): { title: string; body: string } {
+  const lines = markdown.split("\n")
+  const headingIndex = lines.findIndex((line) => line.trim().length > 0)
+  const headingMatch = headingIndex >= 0 ? lines[headingIndex].match(/^#{1,3}\s+(.+?)\s*$/) : null
+
+  if (!headingMatch) {
+    return {
+      title: "DeepSec Security Scan",
+      body: markdown
+    }
+  }
+
+  const bodyLines = [...lines.slice(0, headingIndex), ...lines.slice(headingIndex + 1)]
+  return {
+    title: headingMatch[1],
+    body: bodyLines.join("\n").trim()
+  }
+}
+
 function slugifyFilenamePart(value: string): string {
   return (
     value
@@ -1038,8 +1057,32 @@ function ReportSection({ title, description, children }: { title: string; descri
   )
 }
 
-function GeneratedReportSection({ children }: { children: ReactNode }) {
-  return <section className="rounded-lg border border-border bg-card p-6">{children}</section>
+function GeneratedReportSection({
+  title,
+  downloadUrl,
+  downloadFilename,
+  children
+}: {
+  title: string
+  downloadUrl?: string
+  downloadFilename: string
+  children: ReactNode
+}) {
+  return (
+    <section className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <h2 className="min-w-0 text-3xl font-bold text-foreground">{title}</h2>
+        {downloadUrl ? (
+          <Button asChild size="icon" variant="outline" className="size-8 shrink-0 rounded-md">
+            <a href={downloadUrl} download={downloadFilename} aria-label="Download report" title="Download report">
+              <Download className="size-3.5" />
+            </a>
+          </Button>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  )
 }
 
 function MetricGradeBadge({ grade }: { grade?: MetricSnapshot["grade"] }) {
@@ -1277,12 +1320,14 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
   const report = applyDemoRunOverride(id, applyTranscriptClsFallback(reportJson))
 
   const workflowLabel = getWorkflowLabel(report, run)
+  const workflowType = report.workflowType || run.type || "cls-fix"
   const reportLabel = getRunnerReportLabel(run)
   const reportDescription = getWorkflowDescription(report, workflowLabel)
   const generatedReportMarkdown = getGeneratedReportMarkdown(report)
   const generatedReportDownloadUrl = generatedReportMarkdown
     ? `data:text/markdown;charset=utf-8,${encodeURIComponent(generatedReportMarkdown)}`
     : undefined
+  const generatedReportUsesInlineDownload = workflowType === "deepsec-security-scan"
   const generatedReportFilename = getGeneratedReportFilename(report, run)
   const projectDisplayName = report.projectName || run.projectName
   const devAgentId = report.devAgentId || run.devAgentId
@@ -1332,7 +1377,7 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
   )
   const pageActions = (
     <>
-      {generatedReportDownloadUrl ? (
+      {generatedReportDownloadUrl && !generatedReportUsesInlineDownload ? (
         <Button asChild size="sm" variant="outline" className="h-8 rounded-md px-3 text-[13px]">
           <a href={generatedReportDownloadUrl} download={generatedReportFilename}>
             Download Report
@@ -1376,7 +1421,11 @@ async function WorkflowReportPageData({ params }: { params: Promise<{ id: string
       reportLabel={reportLabel}
       subtitle={projectSubtitle}
       description={reportDescription}
-      actions={isOwner || run.prUrl || generatedReportDownloadUrl ? pageActions : undefined}
+      actions={
+        isOwner || run.prUrl || (generatedReportDownloadUrl && !generatedReportUsesInlineDownload)
+          ? pageActions
+          : undefined
+      }
     >
       {reportBody}
     </StandaloneReportFrame>
@@ -1387,6 +1436,11 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
   const workflowType = report.workflowType || run.type || "cls-fix"
   const generatedReportMarkdown = getGeneratedReportMarkdown(report)
   const generatedReportWebMarkdown = stripGeneratedReportWebOnlySections(generatedReportMarkdown)
+  const generatedReportDisplay = extractLeadingReportHeading(generatedReportWebMarkdown)
+  const generatedReportDownloadUrl = generatedReportMarkdown
+    ? `data:text/markdown;charset=utf-8,${encodeURIComponent(generatedReportMarkdown)}`
+    : undefined
+  const generatedReportFilename = getGeneratedReportFilename(report, run)
   const effectiveSuccessEvalResult =
     workflowType === "deepsec-security-scan" && generatedReportMarkdown ? true : report.successEvalResult
   const successEvalText =
@@ -1713,13 +1767,17 @@ function ReportContentBody({ run, report }: { run: WorkflowRun; report: Workflow
       ) : null}
 
       {workflowType === "deepsec-security-scan" && generatedReportMarkdown ? (
-        <GeneratedReportSection>
+        <GeneratedReportSection
+          title={generatedReportDisplay.title}
+          downloadUrl={generatedReportDownloadUrl}
+          downloadFilename={generatedReportFilename}
+        >
           <AgentAnalysis
-            content={generatedReportWebMarkdown}
+            content={generatedReportDisplay.body}
             controls={{
               code: { copy: true, download: false },
-              table: { copy: true, download: false, fullscreen: true },
-              mermaid: { copy: true, download: false, fullscreen: true, panZoom: true }
+              table: { copy: true, download: false, fullscreen: false },
+              mermaid: { copy: true, download: false, fullscreen: false, panZoom: true }
             }}
           />
         </GeneratedReportSection>
