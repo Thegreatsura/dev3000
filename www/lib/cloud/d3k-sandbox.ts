@@ -103,7 +103,7 @@ export class StepTimer {
 
 const BASE_SNAPSHOT_KEY = "d3k-snapshots/base-snapshot.json"
 const D3K_SANDBOX_RUNTIME = "node24" as const
-const BASE_SNAPSHOT_VERSION = "2026-05-01-agent-runtime-node24-bun-d3k-packaged"
+const BASE_SNAPSHOT_VERSION = "2026-05-04-agent-runtime-node24-bun-d3k-packaged-git"
 
 /**
  * Metadata stored for the base snapshot
@@ -1950,6 +1950,21 @@ async function createAndSaveBaseSnapshot(
   }
 
   try {
+    await reportProgress("Ensuring git is available in shared snapshot...")
+    const gitWhich = await runCmd("sh", ["-lc", "command -v git || true"])
+    if (!gitWhich.stdout.trim()) {
+      const gitInstall = await runCmd("sh", ["-lc", "sudo dnf install -y git"])
+      if (gitInstall.exitCode !== 0) {
+        throw new Error(`git installation failed: ${gitInstall.stderr || gitInstall.stdout}`)
+      }
+      const gitVerify = await runCmd("sh", ["-lc", "git --version"])
+      if (gitVerify.exitCode !== 0) {
+        throw new Error(`git installed but is not runnable: ${gitVerify.stderr || gitVerify.stdout}`)
+      }
+    } else if (debug) {
+      console.log(`  ✅ git found at ${gitWhich.stdout.trim()}`)
+    }
+
     // Install Chrome system dependencies
     if (debug) console.log("  🔧 Installing Chrome system dependencies...")
     await reportProgress("Installing Chrome system dependencies into shared snapshot...")
@@ -2751,6 +2766,13 @@ export async function getOrCreateD3kSandbox(config: D3kSandboxConfig): Promise<D
       }
     } catch (error) {
       timer.end()
+      if (config.onProgress) {
+        await config.onProgress(
+          `Shared base snapshot restore failed, falling back to fresh sandbox: ${
+            error instanceof Error ? error.message.slice(0, 240) : String(error).slice(0, 240)
+          }`
+        )
+      }
       if (debug) {
         console.log(
           `  ⚠️ Snapshot sandbox path failed, falling back to git source: ${error instanceof Error ? error.message : String(error)}`
