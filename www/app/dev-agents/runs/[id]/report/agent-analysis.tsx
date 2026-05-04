@@ -28,6 +28,42 @@ function normalizeReportMarkdown(text: string): string {
   return text.replace(/(^|\n)(\d+)\.\s*\n+\s*(?![-*]\s)(?!\d+\.\s)([^\n]+?)(?=\n|$)/g, "$1$2. $3")
 }
 
+function splitMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "")
+  return trimmed.split("|").map((cell) => cell.trim())
+}
+
+function isMarkdownTableDivider(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)
+}
+
+function normalizeMarkdownTableHeaderCell(cell: string): string {
+  return cell.replace(/[`*_]/g, "").replace(/\s+/g, " ").trim().toLowerCase()
+}
+
+function hasMarkdownTableHeaderColumn(
+  content: string,
+  columnNumber: number | undefined,
+  expectedHeader: string
+): boolean {
+  if (!columnNumber || columnNumber < 1) return false
+
+  const lines = content.split("\n")
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const headerLine = lines[index]
+    const dividerLine = lines[index + 1]
+    if (!headerLine.includes("|") || !isMarkdownTableDivider(dividerLine)) continue
+
+    const headerCells = splitMarkdownTableRow(headerLine)
+    const headerCell = headerCells[columnNumber - 1]
+    if (normalizeMarkdownTableHeaderCell(headerCell || "") === expectedHeader) {
+      return true
+    }
+  }
+
+  return false
+}
+
 function getStableKey(value: string): string {
   let hash = 0
   for (let i = 0; i < value.length; i += 1) {
@@ -205,11 +241,18 @@ export function AgentAnalysis({
   }, [parsed.finalOutput])
 
   const normalizedRawContent = useMemo(() => normalizeReportMarkdown(content), [content])
+  const shouldNowrapTableColumn = useMemo(
+    () => hasMarkdownTableHeaderColumn(normalizedRawContent, nowrapTableColumn, "slug"),
+    [normalizedRawContent, nowrapTableColumn]
+  )
 
   const nowrapTableColumnClassName =
-    nowrapTableColumn === 3
+    nowrapTableColumn === 3 && shouldNowrapTableColumn
       ? "[&_table_th:nth-child(3)]:whitespace-nowrap [&_table_td:nth-child(3)]:whitespace-nowrap [&_table_th:nth-child(3)]:text-left [&_table_td:nth-child(3)]:text-left [&_table_td:nth-child(3)]:align-top [&_table_td:nth-child(3)_code]:whitespace-nowrap [&_table_td:nth-child(3)_code]:bg-transparent [&_table_td:nth-child(3)_code]:px-0"
       : ""
+  const plainTableClassName = plainTables
+    ? "[&_table]:table-fixed [&_table]:w-full [&_table_th]:whitespace-normal [&_table_td]:whitespace-normal [&_table_th]:break-words [&_table_td]:break-words [&_table_th]:[overflow-wrap:anywhere] [&_table_td]:[overflow-wrap:anywhere]"
+    : ""
   const listClassName = compactLists
     ? "[&_ul]:!my-2 [&_ol]:!my-2 [&_ul]:!pl-0 [&_ol]:!pl-0 [&_li]:!list-none [&_li]:!pl-0 [&_li]:text-[0.95em] [&_li]:leading-relaxed [&_li>p]:inline [&_li>p]:my-0"
     : "prose-ol:my-3 prose-ul:my-2 prose-li:my-1 [&_ol]:!list-outside [&_ul]:!list-outside [&_ol]:!pl-7 [&_ul]:!pl-7 [&_ol>li]:pl-0 [&_ul>li]:pl-0 [&_li>p]:inline [&_li>p]:my-0"
@@ -217,6 +260,7 @@ export function AgentAnalysis({
   const analysisClassName = [
     "prose prose-sm dark:prose-invert max-w-none prose-p:my-2",
     listClassName,
+    plainTableClassName,
     nowrapTableColumnClassName,
     topAlignTablesClassName
   ]
@@ -252,7 +296,7 @@ export function AgentAnalysis({
         const tableClassName = ["w-full divide-y divide-border", className].filter(Boolean).join(" ")
 
         return (
-          <div className="my-4 overflow-x-auto rounded-md border border-border bg-background">
+          <div className="my-4 overflow-x-hidden rounded-md border border-border bg-background">
             <table className={tableClassName} data-streamdown="table" {...props}>
               {children}
             </table>
