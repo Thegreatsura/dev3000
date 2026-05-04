@@ -6,6 +6,8 @@ import { getAuthorizePath } from "@/lib/auth-redirect"
 import { isV0DevAgentRunnerEnabled } from "@/lib/cloud/dev-agent-runner"
 import { getDevAgent, MARKETPLACE_AGENT_STATS } from "@/lib/dev-agents"
 import { getDevAgentsRouteContext } from "@/lib/dev-agents-route"
+import { summarizeWorkflowRunsForDevAgent } from "@/lib/workflow-run-stats"
+import { listWorkflowRuns } from "@/lib/workflow-storage"
 
 export default async function RunDevAgentPage({ params }: { params: Promise<{ team: string; agentId: string }> }) {
   const { team, agentId } = await params
@@ -36,6 +38,7 @@ export default async function RunDevAgentPage({ params }: { params: Promise<{ te
 
   const ownerName = devAgent.author.id === "system" ? "Vercel" : devAgent.author.name || devAgent.author.username
   const marketplaceStats = MARKETPLACE_AGENT_STATS[agentId]
+  const runStats = summarizeWorkflowRunsForDevAgent(await listWorkflowRuns(user.id), devAgent)
 
   return (
     <DevAgentsDashboardShell
@@ -51,6 +54,7 @@ export default async function RunDevAgentPage({ params }: { params: Promise<{ te
         user={user}
         defaultUseV0DevAgentRunner={isV0DevAgentRunnerEnabled()}
         marketplaceStats={marketplaceStats}
+        runStats={runStats}
       />
     </DevAgentsDashboardShell>
   )

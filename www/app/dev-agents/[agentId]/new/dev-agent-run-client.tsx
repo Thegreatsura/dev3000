@@ -73,6 +73,11 @@ interface MarketplaceStats {
   previouslyPurchased: boolean
 }
 
+interface RunStats {
+  runCount: number
+  avgCost?: string
+}
+
 interface DevAgentRunClientProps {
   devAgent: DevAgent
   ownerName: string
@@ -80,6 +85,7 @@ interface DevAgentRunClientProps {
   user: UserInfo
   defaultUseV0DevAgentRunner: boolean
   marketplaceStats?: MarketplaceStats
+  runStats?: RunStats
   runnerKind?: "dev-agent" | "skill-runner"
   skillRunnerExecutionMode?: SkillRunnerExecutionMode
   skillRunnerWorkerBaseUrl?: string
@@ -179,6 +185,7 @@ export default function DevAgentRunClient({
   user,
   defaultUseV0DevAgentRunner,
   marketplaceStats,
+  runStats,
   runnerKind = "dev-agent",
   skillRunnerExecutionMode = "hosted",
   skillRunnerWorkerBaseUrl,
@@ -255,6 +262,8 @@ export default function DevAgentRunClient({
     !githubPatEnvVar?.value.trim()
   const runnerLabel = runnerKind === "skill-runner" ? "skill runner" : "dev agent"
   const runnerTitle = runnerKind === "skill-runner" ? "Skill Runner" : "Dev Agent"
+  const displayedRunCount = runStats?.runCount ?? devAgent.usageCount
+  const displayedAvgCost = runStats?.avgCost ?? devAgent.avgCost
   const isSelfHostedSkillRunner = runnerKind === "skill-runner" && localSkillRunnerExecutionMode === "self-hosted"
   const isReadySelfHostedSkillRunner =
     isSelfHostedSkillRunner && Boolean(localSkillRunnerWorkerBaseUrl) && localSkillRunnerWorkerStatus === "ready"
@@ -854,10 +863,17 @@ export default function DevAgentRunClient({
             </div>
           </div>
         ) : (
-          <div className="border-t border-[#1f1f1f] px-4 py-2.5">
-            <span className="text-[13px] text-[#888]">
-              <span className="text-[#ededed]">{devAgent.usageCount}</span> runs
-            </span>
+          <div className="border-t border-[#1f1f1f] px-4 py-3">
+            <div className="grid grid-cols-2 gap-3 sm:max-w-xs">
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-[#555]">Runs</div>
+                <div className="mt-0.5 text-[13px] font-medium text-[#ededed]">{displayedRunCount}</div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-[#555]">Avg Cost</div>
+                <div className="mt-0.5 text-[13px] font-medium text-[#ededed]">{displayedAvgCost || "—"}</div>
+              </div>
+            </div>
           </div>
         )}
 
