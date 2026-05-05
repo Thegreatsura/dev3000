@@ -15,7 +15,7 @@ import type {
 const ASH_PACKAGE_NAME = "experimental-ash"
 const ASH_PACKAGE_VERSION = "0.3.0-alpha.31"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
-const ASH_ARTIFACT_FORMAT_VERSION = 12
+const ASH_ARTIFACT_FORMAT_VERSION = 13
 
 export interface DevAgentAshArtifact {
   framework: "experimental-ash"
@@ -323,26 +323,47 @@ export default defineRoute({
       input: { message },
       mode: "task",
     });
-    ctx.waitUntil(
-      handle.result.catch((error) => {
-        console.error("[dev3000 ash task] background run failed", error);
-      }),
-    );
 
-    return Response.json(
-      {
-        continuationToken: handle.continuationToken,
-        ok: true,
-        sessionId: handle.sessionId,
-        streamPath: \`/.well-known/ash/v1/sessions/\${encodeURIComponent(handle.sessionId)}/stream\`,
-      },
-      {
-        headers: {
-          "cache-control": "no-store",
+    const streamPath = \`/.well-known/ash/v1/sessions/\${encodeURIComponent(handle.sessionId)}/stream\`;
+
+    try {
+      const result = await handle.result;
+      return Response.json(
+        {
+          continuationToken: handle.continuationToken,
+          ok: true,
+          result,
+          resultText: result.status === "completed" ? result.output : "",
+          sessionId: handle.sessionId,
+          streamPath,
+          terminalState: result.status,
         },
-        status: 202,
-      },
-    );
+        {
+          headers: {
+            "cache-control": "no-store",
+          },
+          status: 200,
+        },
+      );
+    } catch (error) {
+      console.error("[dev3000 ash task] run failed", error);
+      return Response.json(
+        {
+          continuationToken: handle.continuationToken,
+          error: error instanceof Error ? error.message : String(error),
+          ok: false,
+          sessionId: handle.sessionId,
+          streamPath,
+        },
+        {
+          headers: {
+            "cache-control": "no-store",
+          },
+          status: 500,
+        },
+      );
+    }
+
   },
 });
 `

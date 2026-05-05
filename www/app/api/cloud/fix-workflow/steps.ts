@@ -5489,6 +5489,92 @@ async function readAshStreamChunkWithTimeout(
   }
 }
 
+type AshRuntimeUsage = {
+  promptTokens: number
+  completionTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  totalTokens: number
+}
+
+function createEmptyAshRuntimeUsage(): AshRuntimeUsage {
+  return {
+    promptTokens: 0,
+    completionTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    totalTokens: 0
+  }
+}
+
+function normalizeAshRuntimeUsage(value: unknown): AshRuntimeUsage {
+  if (!value || typeof value !== "object") {
+    return createEmptyAshRuntimeUsage()
+  }
+
+  const usage = value as Partial<Record<keyof AshRuntimeUsage, unknown>>
+  const promptTokens = typeof usage.promptTokens === "number" ? usage.promptTokens : 0
+  const completionTokens = typeof usage.completionTokens === "number" ? usage.completionTokens : 0
+  const cacheReadTokens = typeof usage.cacheReadTokens === "number" ? usage.cacheReadTokens : 0
+  const cacheCreationTokens = typeof usage.cacheCreationTokens === "number" ? usage.cacheCreationTokens : 0
+  const computedTotal = promptTokens + completionTokens + cacheReadTokens + cacheCreationTokens
+  const totalTokens = typeof usage.totalTokens === "number" ? usage.totalTokens : computedTotal
+
+  return {
+    promptTokens,
+    completionTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    totalTokens
+  }
+}
+
+function extractAshRuntimeTaskResultText(payload: {
+  result?: unknown
+  resultText?: unknown
+  summary?: unknown
+}): string {
+  if (typeof payload.resultText === "string") {
+    return payload.resultText.trim()
+  }
+
+  if (typeof payload.summary === "string") {
+    return payload.summary.trim()
+  }
+
+  const result = payload.result
+  if (!result || typeof result !== "object") {
+    return typeof result === "string" ? result.trim() : ""
+  }
+
+  const output = (result as { output?: unknown }).output
+  if (typeof output === "string") {
+    return output.trim()
+  }
+
+  const message = (result as { message?: unknown }).message
+  return typeof message === "string" ? message.trim() : ""
+}
+
+function extractAshRuntimeTaskTerminalState(payload: {
+  result?: unknown
+  terminalState?: unknown
+}): "waiting" | "completed" | null {
+  if (payload.terminalState === "waiting" || payload.terminalState === "completed") {
+    return payload.terminalState
+  }
+
+  const result = payload.result
+  if (result && typeof result === "object") {
+    const status = (result as { status?: unknown }).status
+    if (status === "waiting" || status === "completed") {
+      return status
+    }
+  }
+
+  return null
+}
+
 async function readAshRuntimeSessionStream(
   baseUrl: string,
   authorization: string,
@@ -5500,13 +5586,7 @@ async function readAshRuntimeSessionStream(
   rawEvents: string[]
   resultText: string
   terminalState: "waiting" | "completed"
-  usage: {
-    promptTokens: number
-    completionTokens: number
-    cacheReadTokens: number
-    cacheCreationTokens: number
-    totalTokens: number
-  }
+  usage: AshRuntimeUsage
 }> {
   const maxReconnectAttempts = 240
   const reconnectDelayMs = 1000
@@ -5881,13 +5961,7 @@ async function streamAshRuntimeTask(
   resultText: string
   sessionId: string
   terminalState: "waiting" | "completed"
-  usage: {
-    promptTokens: number
-    completionTokens: number
-    cacheReadTokens: number
-    cacheCreationTokens: number
-    totalTokens: number
-  }
+  usage: AshRuntimeUsage
 }> {
   const taskResponse = await fetch(`${baseUrl}${ASH_TASK_ROUTE_PATH}`, {
     method: "POST",
@@ -5905,8 +5979,13 @@ async function streamAshRuntimeTask(
 
   let taskPayload: {
     ok?: boolean
+    result?: unknown
+    resultText?: unknown
     sessionId?: string
     streamPath?: string
+    summary?: unknown
+    terminalState?: unknown
+    usage?: unknown
   }
   try {
     taskPayload = JSON.parse(taskPayloadText) as typeof taskPayload
@@ -5927,6 +6006,22 @@ async function streamAshRuntimeTask(
     throw new Error("ASH runtime task route did not return a session id.")
   }
   await appendProgressLog(progressContext, `[Agent] Analysis session started: ${sessionId}`)
+  const directTerminalState = extractAshRuntimeTaskTerminalState(taskPayload)
+  if (directTerminalState) {
+    const resultText = extractAshRuntimeTaskResultText(taskPayload)
+    await appendProgressLog(
+      progressContext,
+      `[Agent] Analysis session ${directTerminalState}${resultText ? `: ${formatClaudeOutputPreview(resultText, 180)}` : "."}`
+    )
+    return {
+      rawEvents: [],
+      resultText,
+      sessionId,
+      terminalState: directTerminalState,
+      usage: normalizeAshRuntimeUsage(taskPayload.usage)
+    }
+  }
+
   const streamResult = await readAshRuntimeSessionStream(
     baseUrl,
     authorization,
