@@ -5250,6 +5250,65 @@ async function ensurePackagedAshRuntimeInSandbox(
 
 type AshRuntimeDiagnostics = (sessionId: string) => Promise<string>
 
+function formatAshRuntimeInputPreview(input: unknown): string {
+  if (!input || typeof input !== "object") {
+    return ""
+  }
+
+  const record = input as Record<string, unknown>
+  const preferredKeys = ["command", "cmd", "path", "filePath", "name", "query"]
+  for (const key of preferredKeys) {
+    const value = record[key]
+    if (typeof value === "string" && value.trim()) {
+      return `: ${formatClaudeOutputPreview(value, 140)}`
+    }
+  }
+
+  return ""
+}
+
+function formatAshRuntimeActionRequest(action: unknown): string {
+  if (!action || typeof action !== "object") {
+    return "unknown action"
+  }
+
+  const record = action as Record<string, unknown>
+  const kind = typeof record.kind === "string" ? record.kind : "action"
+  if (kind === "tool-call") {
+    const toolName = typeof record.toolName === "string" ? record.toolName : "tool"
+    return `${toolName}${formatAshRuntimeInputPreview(record.input)}`
+  }
+  if (kind === "load-skill") {
+    return `load skill${formatAshRuntimeInputPreview(record.input)}`
+  }
+  if (kind === "subagent-call") {
+    const name = typeof record.name === "string" ? record.name : "subagent"
+    return `subagent ${name}${formatAshRuntimeInputPreview(record.input)}`
+  }
+
+  return `${kind}${formatAshRuntimeInputPreview(record.input)}`
+}
+
+function formatAshRuntimeActionResult(result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return "unknown action"
+  }
+
+  const record = result as Record<string, unknown>
+  const kind = typeof record.kind === "string" ? record.kind : "action"
+  if (kind === "tool-result") {
+    return typeof record.toolName === "string" ? record.toolName : "tool"
+  }
+  if (kind === "load-skill-result") {
+    return typeof record.name === "string" && record.name ? `load skill ${record.name}` : "load skill"
+  }
+  if (kind === "subagent-result") {
+    return typeof record.subagentName === "string" ? `subagent ${record.subagentName}` : "subagent"
+  }
+
+  return kind
+}
+
 function redactAshDiagnosticSecrets(value: string): string {
   return value
     .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]")
@@ -5512,6 +5571,44 @@ async function readAshRuntimeSessionStream(
           `[ASH] Assistant message completed (${String(event.data?.finishReason || "unknown")}): ${message.slice(0, 160)}`
         )
       }
+    }
+
+    if (event.type === "sandbox.command") {
+      const command = typeof event.data?.command === "string" ? event.data.command : ""
+      const context = typeof event.data?.context === "string" ? event.data.context : "command"
+      await appendProgressLog(
+        progressContext,
+        `[ASH] Sandbox command (${context}): ${formatClaudeOutputPreview(command, 180)}`
+      )
+    }
+
+    if (event.type === "actions.requested") {
+      const actions = Array.isArray(event.data?.actions) ? event.data.actions : []
+      if (actions.length > 0) {
+        await appendProgressLog(
+          progressContext,
+          `[ASH] Running ${actions.length === 1 ? "action" : `${actions.length} actions`}: ${actions
+            .map(formatAshRuntimeActionRequest)
+            .join(", ")}`
+        )
+      }
+    }
+
+    if (event.type === "action.result") {
+      const status = typeof event.data?.status === "string" ? event.data.status : "completed"
+      const label = formatAshRuntimeActionResult(event.data?.result)
+      const errorMessage =
+        event.data?.error && typeof event.data.error === "object"
+          ? (event.data.error as { message?: unknown }).message
+          : undefined
+      await appendProgressLog(
+        progressContext,
+        `[ASH] ${status === "failed" ? "Failed" : "Completed"} action: ${label}${
+          typeof errorMessage === "string" && errorMessage.trim()
+            ? ` (${formatClaudeOutputPreview(errorMessage, 160)})`
+            : ""
+        }`
+      )
     }
 
     if (event.type === "step.completed") {
