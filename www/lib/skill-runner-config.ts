@@ -6,6 +6,7 @@ export const HOSTED_SKILL_RUNNER_TEAM_IDS = [
   "team_nLlpyC6REAqxydlFKbrMDlud", // vercel
   "team_nO2mCG4W8IxPIeKoSsqwAxxB" // vercel-labs
 ] as const
+export const HOSTED_SKILL_RUNNER_TEAM_SLUGS = ["vercel", "vercel-labs"] as const
 
 export type SkillRunnerExecutionMode = "hosted" | "self-hosted"
 export type SkillRunnerWorkerStatus = "unconfigured" | "provisioning" | "ready" | "error" | "outdated"
