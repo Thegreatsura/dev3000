@@ -6,7 +6,17 @@ import { getCurrentUserFromRequest } from "@/lib/auth"
 import { resolveDevAgentRunner } from "@/lib/cloud/dev-agent-runner"
 import { type DevAgent, ensureDevAgentAshArtifactPrepared, getDevAgent, incrementDevAgentUsage } from "@/lib/dev-agents"
 import { isSelfHostedSkillRunnerRuntime } from "@/lib/skill-runner-runtime"
-import { getSkillRunnerForExecution, getSkillRunnerTeamSettings, incrementSkillRunnerUsage } from "@/lib/skill-runners"
+import {
+  findSkillRunnerWorkerProject,
+  resolveSkillRunnerWorkerStatus,
+  type SkillRunnerWorkerProject
+} from "@/lib/skill-runner-worker"
+import {
+  getSkillRunnerForExecution,
+  getSkillRunnerTeamSettings,
+  incrementSkillRunnerUsage,
+  updateSkillRunnerTeamSettings
+} from "@/lib/skill-runners"
 import {
   buildIdentityProps,
   buildTelemetryEvent,
@@ -710,34 +720,68 @@ export async function POST(request: Request) {
       }
 
       if (teamSettings.executionMode === "self-hosted" && !isSelfHostedWorker) {
-        const configuredWorkerBaseUrl = teamSettings.workerBaseUrl?.trim()
+        let workerProject: SkillRunnerWorkerProject | null = null
+        try {
+          workerProject = await findSkillRunnerWorkerProject(accessToken, {
+            id: team.id,
+            slug: team.slug,
+            name: team.name,
+            isPersonal: Boolean(team.isPersonal)
+          })
+        } catch (workerValidationError) {
+          workflowError(
+            "[Start Fix] Failed to validate self-hosted skill runner before forwarding:",
+            workerValidationError
+          )
+          return runnerSetupRequiredResponse(
+            `Could not validate the ${team.name} runner project before starting this run. Retry runner setup to repair it.`
+          )
+        }
 
-        if (!teamSettings.workerProjectId || !configuredWorkerBaseUrl) {
+        const liveWorkerStatus = resolveSkillRunnerWorkerStatus(workerProject)
+        const liveWorkerProjectId = workerProject?.projectId || ""
+        const liveWorkerBaseUrl = workerProject?.workerBaseUrl || ""
+        await updateSkillRunnerTeamSettings(
+          {
+            id: team.id,
+            slug: team.slug,
+            name: team.name,
+            isPersonal: Boolean(team.isPersonal)
+          },
+          {
+            executionMode: "self-hosted",
+            workerProjectId: liveWorkerProjectId,
+            workerBaseUrl: liveWorkerBaseUrl,
+            workerStatus: liveWorkerStatus
+          }
+        )
+
+        if (!workerProject || !liveWorkerProjectId || !liveWorkerBaseUrl) {
           return runnerSetupRequiredResponse(
             `Self-hosted skill-runner mode is enabled for ${team.name}, but no runner project is configured yet.`
           )
         }
 
-        if (teamSettings.workerStatus === "provisioning") {
+        if (liveWorkerStatus === "provisioning") {
           return runnerSetupRequiredResponse(
             `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project is still provisioning.`
           )
         }
 
-        if (teamSettings.workerStatus === "outdated") {
+        if (liveWorkerStatus === "outdated") {
           return runnerSetupRequiredResponse(
-            `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project is updating to the latest shell version.`
+            `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project needs an update before it can start runs.`
           )
         }
 
-        if (teamSettings.workerStatus !== "ready") {
+        if (liveWorkerStatus !== "ready") {
           return runnerSetupRequiredResponse(
             `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project still needs its team-owned Blob setup repaired.`
           )
         }
 
-        selfHostedWorkerBaseUrl = configuredWorkerBaseUrl
-        selfHostedWorkerProjectId = teamSettings.workerProjectId
+        selfHostedWorkerBaseUrl = liveWorkerBaseUrl
+        selfHostedWorkerProjectId = liveWorkerProjectId
         selfHostedWorkerTeamId = team.id
       }
     } else if (typeof body.devAgentId === "string" && body.devAgentId.trim().length > 0) {
