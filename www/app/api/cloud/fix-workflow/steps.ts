@@ -5235,7 +5235,7 @@ async function ensurePackagedAshRuntimeInSandbox(
         `if [ -f scripts/patch-workflow-world-local.mjs ]; then "$NODE_RUNTIME" scripts/patch-workflow-world-local.mjs >> ${logPath} 2>&1 || { echo "ASH workflow schema patch failed" >> ${logPath}; exit 1; }; fi`,
         `printf 'runtime=%s\\npwd=%s\\nport=%s\\nworkflow_world=%s\\nworkflow_base_url=%s\\nworkflow_data_dir=%s\\nvercel=%s\\n' "$NODE_RUNTIME" "$(pwd)" "${ASH_RUNTIME_PORT}" "$WORKFLOW_TARGET_WORLD" "$WORKFLOW_LOCAL_BASE_URL" "$WORKFLOW_LOCAL_DATA_DIR" "$VERCEL" >> ${logPath}`,
         `ls -l ./node_modules/.bin/ash ./.output/server/index.mjs >> ${logPath} 2>&1 || true`,
-        `exec ./node_modules/.bin/ash dev --no-repl --host 0.0.0.0 --port ${ASH_RUNTIME_PORT} >> ${logPath} 2>&1`
+        `exec "$NODE_RUNTIME" ./.output/server/index.mjs >> ${logPath} 2>&1`
       ]
         .filter(Boolean)
         .join("\n")
@@ -5974,7 +5974,15 @@ async function streamAshRuntimeTask(
 
   const taskPayloadText = await taskResponse.text()
   if (!taskResponse.ok) {
-    throw new Error(`ASH runtime rejected message start (${taskResponse.status}): ${taskPayloadText}`)
+    const diagnosticText = diagnostics ? await diagnostics("task-start").catch(() => "") : ""
+    throw new Error(
+      [
+        `ASH runtime rejected message start (${taskResponse.status}): ${taskPayloadText}`,
+        diagnosticText ? `Diagnostics:\n${diagnosticText}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    )
   }
 
   let taskPayload: {

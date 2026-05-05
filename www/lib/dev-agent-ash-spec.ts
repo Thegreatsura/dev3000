@@ -15,7 +15,7 @@ import type {
 const ASH_PACKAGE_NAME = "experimental-ash"
 const ASH_PACKAGE_VERSION = "0.3.0-alpha.31"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
-const ASH_ARTIFACT_FORMAT_VERSION = 13
+const ASH_ARTIFACT_FORMAT_VERSION = 14
 
 export interface DevAgentAshArtifact {
   framework: "experimental-ash"
@@ -365,26 +365,6 @@ export default defineRoute({
     }
 
   },
-});
-`
-}
-
-function renderAshRuntimeStreamChannel(): string {
-  return `import { httpBasic } from "experimental-ash/channels/auth";
-import { httpRunStreamRoute } from "experimental-ash/channels/http";
-
-const username = process.env.DEV3000_ASH_RUNTIME_USERNAME || "dev3000";
-const password = process.env.DEV3000_ASH_RUNTIME_PASSWORD;
-
-if (!password) {
-  throw new Error("DEV3000_ASH_RUNTIME_PASSWORD is required for the generated Ash runtime route.");
-}
-
-export default httpRunStreamRoute({
-  auth: httpBasic({
-    username,
-    password,
-  }),
 });
 `
 }
@@ -1022,10 +1002,6 @@ export async function createDevAgentAshSource(input: DevAgentAshInput, revision:
     {
       path: "agent/channels/.well-known/ash/v1/task.ts",
       content: renderAshRuntimeTaskChannel()
-    },
-    {
-      path: "agent/channels/.well-known/ash/v1/sessions/[sessionId]/stream.ts",
-      content: renderAshRuntimeStreamChannel()
     },
     {
       path: "agent/sandbox/sandbox.ts",
