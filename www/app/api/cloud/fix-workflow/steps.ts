@@ -4072,6 +4072,21 @@ process.stdout.write(JSON.stringify(null))
   }
 }
 
+function isSuccessfulDeepSecGeneratedReport(markdown: string | undefined): boolean {
+  const content = markdown?.trim()
+  if (!content) return false
+
+  const normalized = content.toLowerCase()
+  return ![
+    "claude code native binary not found",
+    "no actual vulnerability analysis occurred",
+    "processing failure",
+    "processing pass failed",
+    "ai investigation degraded",
+    "manual fallback report"
+  ].some((failureSignal) => normalized.includes(failureSignal))
+}
+
 export async function agentFixLoopStep(
   sandboxId: string,
   devUrl: string,
@@ -4588,7 +4603,7 @@ export async function agentFixLoopStep(
   // ── Success Eval ──────────────────────────────────────────────────────
   let successEvalResult: boolean | null = null
   if (workflowType === "deepsec-security-scan") {
-    successEvalResult = Boolean(generatedReportMarkdown)
+    successEvalResult = isSuccessfulDeepSecGeneratedReport(generatedReportMarkdown)
   } else if (devAgentSuccessEval?.trim()) {
     try {
       timer.start("Success eval")
@@ -7103,8 +7118,10 @@ function buildWorkflowSpecificExecutionGuidance({
       "This is a code-only DeepSec workflow. Do not start a dev server or use browser/Web Vitals tooling.",
       "Run DeepSec from the target project checkout and keep the durable setup under `.deepsec/`.",
       "Use the environment-provided AI Gateway credentials. Do not write credentials into `.env.local` or tracked files.",
+      "After installing `.deepsec` dependencies with pnpm, run `node node_modules/@anthropic-ai/claude-code/install.cjs` from `.deepsec/` and verify `node_modules/.bin/claude --version` before processing.",
       "Use the default bounded processing pass unless the user explicitly requested a full scan.",
-      "Export markdown findings or create a no-findings README so the run leaves a reviewable artifact."
+      "If DeepSec processing fails, stop and report the failure instead of generating a fallback report.",
+      "Export markdown findings or create a no-findings README only after DeepSec processing succeeds."
     ].join("\n")
   }
 

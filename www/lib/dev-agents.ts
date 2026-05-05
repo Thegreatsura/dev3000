@@ -433,7 +433,7 @@ export const DEEPSEC_DEV_AGENT_DESCRIPTION =
   "Install DeepSec, bootstrap project-specific context, run a bounded first-pass security scan, and generate a report."
 
 export const DEEPSEC_DEV_AGENT_INSTRUCTIONS =
-  "Run DeepSec against the selected project checkout without starting a dev server. Initialize the .deepsec workspace if needed, install dependencies, fill INFO.md with concise project-specific security context, run the regex scan, process a bounded first pass with AI Gateway credentials from the environment, and generate a markdown report that dev3000 can show and make available for download. If the DeepSec processing pass fails, stop and report the failure instead of generating a manual fallback report. Do not write secrets to files. Do not run an unbounded DeepSec process unless run-specific instructions explicitly request a full scan."
+  "Run DeepSec against the selected project checkout without starting a dev server. Initialize the .deepsec workspace if needed, install dependencies, run the Claude Code postinstall from .deepsec so DeepSec can use the native binary, fill INFO.md with concise project-specific security context, run the regex scan, process a bounded first pass with AI Gateway credentials from the environment, and generate a markdown report that dev3000 can show and make available for download. If the DeepSec processing pass fails, stop and report the failure instead of generating a manual fallback report. Do not write secrets to files. Do not run an unbounded DeepSec process unless run-specific instructions explicitly request a full scan."
 
 export const DEEPSEC_DEV_AGENT_ACTION_STEPS: DevAgentActionStep[] = [
   {
@@ -447,7 +447,7 @@ export const DEEPSEC_DEV_AGENT_ACTION_STEPS: DevAgentActionStep[] = [
     kind: "send-prompt",
     config: {
       prompt:
-        "Install the .deepsec workspace dependencies, read DeepSec's installed SKILL.md and SETUP.md, and replace INFO.md with concise project-specific context."
+        "Install the .deepsec workspace dependencies, run `node node_modules/@anthropic-ai/claude-code/install.cjs` from `.deepsec/`, verify `node_modules/.bin/claude --version`, read DeepSec's installed SKILL.md and SETUP.md, and replace INFO.md with concise project-specific context."
     }
   },
   {
