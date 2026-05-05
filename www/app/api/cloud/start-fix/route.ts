@@ -808,6 +808,16 @@ export async function POST(request: Request) {
       workflowLog(`[Start Fix] Production URL: ${productionUrl}`)
     }
 
+    if (workflowType === "deepsec-security-scan" && analysisTargetType !== "url" && !repoUrl) {
+      return Response.json(
+        {
+          success: false,
+          error: "DeepSec requires a GitHub-backed Vercel project. Select a project connected to a GitHub repository."
+        },
+        { status: 400, headers: corsHeaders }
+      )
+    }
+
     // Validate required fields for v2 workflow
     if (analysisTargetType !== "url" && !repoUrl && !(useV0DevAgentRunner && projectId)) {
       return Response.json(

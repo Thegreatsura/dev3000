@@ -164,6 +164,36 @@ function isSkillRunnerWorkerProject(project: Pick<Project, "name">): boolean {
   return project.name === SKILL_RUNNER_WORKER_PROJECT_NAME
 }
 
+function getProjectGitHubRepo(project: Project): { owner: string; repo: string } | null {
+  const linkedOwner = project.link?.org?.trim()
+  const linkedRepo = project.link?.repo?.trim()
+  if (linkedOwner && linkedRepo) {
+    return { owner: linkedOwner, repo: linkedRepo }
+  }
+
+  const deploymentWithGitHubMeta = project.latestDeployments.find(
+    (deployment) => deployment.meta?.githubOrg?.trim() && deployment.meta?.githubRepo?.trim()
+  )
+  const metaOwner = deploymentWithGitHubMeta?.meta?.githubOrg?.trim()
+  const metaRepo = deploymentWithGitHubMeta?.meta?.githubRepo?.trim()
+  return metaOwner && metaRepo ? { owner: metaOwner, repo: metaRepo } : null
+}
+
+function isSelectableProject(
+  project: Project,
+  options: { runnerKind: "dev-agent" | "skill-runner"; requiresGitHubBackedProject: boolean }
+): boolean {
+  if (options.runnerKind === "skill-runner" && isSkillRunnerWorkerProject(project)) {
+    return false
+  }
+
+  if (options.requiresGitHubBackedProject && !getProjectGitHubRepo(project)) {
+    return false
+  }
+
+  return true
+}
+
 function DevAgentCriteriaSummary({ devAgent, hideEarlyExit = false }: { devAgent: DevAgent; hideEarlyExit?: boolean }) {
   const successEvalText = devAgent.successEval?.trim() || "None"
   const earlyExitText = devAgent.earlyExitEval?.trim() || "None"
@@ -237,18 +267,20 @@ export default function DevAgentRunClient({
   const [repoVisibilities, setRepoVisibilities] = useState<Map<string, RepoVisibility>>(new Map())
 
   const selectedTeam = team
+  const requiresGitHubBackedProject = devAgent.legacyWorkflowType === "deepsec-security-scan"
   const allProjects = useMemo(() => {
-    const selectableProjects =
-      runnerKind === "skill-runner" ? projects.filter((project) => !isSkillRunnerWorkerProject(project)) : projects
+    const selectableProjects = projects.filter((project) =>
+      isSelectableProject(project, { runnerKind, requiresGitHubBackedProject })
+    )
     if (
       !selectedProjectFallback ||
-      isSkillRunnerWorkerProject(selectedProjectFallback) ||
+      !isSelectableProject(selectedProjectFallback, { runnerKind, requiresGitHubBackedProject }) ||
       selectableProjects.some((project) => project.id === selectedProjectFallback.id)
     ) {
       return selectableProjects
     }
     return [selectedProjectFallback, ...selectableProjects]
-  }, [projects, runnerKind, selectedProjectFallback])
+  }, [projects, requiresGitHubBackedProject, runnerKind, selectedProjectFallback])
   const filteredProjects = useMemo(() => {
     const query = projectSearch.trim().toLowerCase()
     if (!query) return allProjects
@@ -259,8 +291,9 @@ export default function DevAgentRunClient({
     [allProjects, selectedProjectId]
   )
   const selectedProjectListVisibility = selectedProjectId ? repoVisibilities.get(selectedProjectId) : undefined
-  const selectedRepoOwner = selectedProject?.link?.org || selectedProject?.latestDeployments[0]?.meta?.githubOrg
-  const selectedRepoName = selectedProject?.link?.repo || selectedProject?.latestDeployments[0]?.meta?.githubRepo
+  const selectedProjectGitHubRepo = selectedProject ? getProjectGitHubRepo(selectedProject) : null
+  const selectedRepoOwner = selectedProjectGitHubRepo?.owner
+  const selectedRepoName = selectedProjectGitHubRepo?.repo
   const hasGitHubRepoInfo = Boolean(selectedRepoOwner && selectedRepoName)
   const effectiveRepoVisibility = selectedProjectListVisibility ?? repoVisibility
   const githubPatEnvVar = runnerEnvVars.find(
@@ -493,11 +526,7 @@ export default function DevAgentRunClient({
         }
         if (controller.signal.aborted) return
         const nextProjects = Array.isArray(data.projects) ? (data.projects as Project[]) : []
-        setProjects(
-          runnerKind === "skill-runner"
-            ? nextProjects.filter((project) => !isSkillRunnerWorkerProject(project))
-            : nextProjects
-        )
+        setProjects(nextProjects)
       })
       .catch((loadError: unknown) => {
         if (controller.signal.aborted) return
@@ -510,7 +539,7 @@ export default function DevAgentRunClient({
       })
 
     return () => controller.abort()
-  }, [runnerKind, selectedTeamId, selectedTeamScope])
+  }, [selectedTeamId, selectedTeamScope])
 
   useEffect(() => {
     if (!selectedProjectId || !selectedTeamScope) {
@@ -536,9 +565,14 @@ export default function DevAgentRunClient({
         }
         if (controller.signal.aborted) return
         const fallbackProject = data.project as Project
-        if (runnerKind === "skill-runner" && isSkillRunnerWorkerProject(fallbackProject)) {
+        if (!isSelectableProject(fallbackProject, { runnerKind, requiresGitHubBackedProject })) {
           setSelectedProjectFallback(null)
           setSelectedProjectId("")
+          if (requiresGitHubBackedProject && !getProjectGitHubRepo(fallbackProject)) {
+            setError(
+              "DeepSec requires a GitHub-backed Vercel project. Select a project connected to a GitHub repository."
+            )
+          }
           return
         }
         setSelectedProjectFallback(fallbackProject)
@@ -551,7 +585,16 @@ export default function DevAgentRunClient({
       })
 
     return () => controller.abort()
-  }, [projects, runnerKind, selectedProjectId, selectedTeamScope])
+  }, [projects, requiresGitHubBackedProject, runnerKind, selectedProjectId, selectedTeamScope])
+
+  useEffect(() => {
+    if (!selectedProjectId || projectsLoading || projects.length === 0) return
+    if (allProjects.some((project) => project.id === selectedProjectId)) return
+    if (!projects.some((project) => project.id === selectedProjectId)) return
+
+    setSelectedProjectFallback(null)
+    setSelectedProjectId("")
+  }, [allProjects, projects, projectsLoading, selectedProjectId])
 
   // Batch-fetch repo visibility for all projects with GitHub links
   useEffect(() => {
@@ -559,18 +602,17 @@ export default function DevAgentRunClient({
 
     const controller = new AbortController()
     const projectsWithGithub = allProjects
-      .filter((project): project is Project & { link: { org: string; repo: string } } =>
-        Boolean(project.link?.org && project.link?.repo)
-      )
+      .map((project) => ({ project, repo: getProjectGitHubRepo(project) }))
+      .filter((entry): entry is { project: Project; repo: { owner: string; repo: string } } => Boolean(entry.repo))
       .slice(0, 20) // cap to avoid rate limits
 
     if (projectsWithGithub.length === 0) return
 
     void Promise.allSettled(
-      projectsWithGithub.map(async (project) => {
+      projectsWithGithub.map(async ({ project, repo }) => {
         const params = new URLSearchParams({
-          owner: project.link.org,
-          repo: project.link.repo
+          owner: repo.owner,
+          repo: repo.repo
         })
         const response = await fetch(`/api/github/repo-visibility?${params.toString()}`, {
           signal: controller.signal
@@ -726,8 +768,15 @@ export default function DevAgentRunClient({
       return
     }
 
-    const repoOwner = project.link?.org || latestDeployment.meta?.githubOrg
-    const repoName = project.link?.repo || latestDeployment.meta?.githubRepo
+    const projectGitHubRepo = getProjectGitHubRepo(project)
+    if (requiresGitHubBackedProject && !projectGitHubRepo) {
+      setIsRunning(false)
+      setError("DeepSec requires a GitHub-backed Vercel project. Select a project connected to a GitHub repository.")
+      return
+    }
+
+    const repoOwner = projectGitHubRepo?.owner
+    const repoName = projectGitHubRepo?.repo
     const gitRef = latestDeployment.gitSource?.ref || baseBranch || latestDeployment.gitSource?.sha || "main"
     const sanitizedEnvVars = runnerEnvVars
       .map((envVar) => ({
@@ -974,7 +1023,9 @@ export default function DevAgentRunClient({
                   Loading projects…
                 </div>
               ) : filteredProjects.length === 0 ? (
-                <p className="py-3 text-[13px] text-[#666]">No matching projects.</p>
+                <p className="py-3 text-[13px] text-[#666]">
+                  {requiresGitHubBackedProject ? "No GitHub-backed projects found." : "No matching projects."}
+                </p>
               ) : (
                 filteredProjects.map((project) => (
                   <button

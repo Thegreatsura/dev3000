@@ -248,10 +248,10 @@ export function AgentAnalysis({
 
   const nowrapTableColumnClassName =
     nowrapTableColumn === 3 && shouldNowrapTableColumn
-      ? "[&_table_th:nth-child(3)]:whitespace-nowrap [&_table_td:nth-child(3)]:whitespace-nowrap [&_table_th:nth-child(3)]:text-left [&_table_td:nth-child(3)]:text-left [&_table_td:nth-child(3)]:align-top [&_table_td:nth-child(3)_code]:whitespace-nowrap [&_table_td:nth-child(3)_code]:bg-transparent [&_table_td:nth-child(3)_code]:px-0"
+      ? "[&_table_th:nth-child(1)]:w-px [&_table_td:nth-child(1)]:w-px [&_table_th:nth-child(1)]:!whitespace-nowrap [&_table_td:nth-child(1)]:!whitespace-nowrap [&_table_th:nth-child(2)]:w-px [&_table_td:nth-child(2)]:w-px [&_table_th:nth-child(2)]:!whitespace-nowrap [&_table_td:nth-child(2)]:!whitespace-nowrap [&_table_th:nth-child(3)]:w-px [&_table_td:nth-child(3)]:w-px [&_table_th:nth-child(3)]:!whitespace-nowrap [&_table_td:nth-child(3)]:!whitespace-nowrap [&_table_th:nth-child(3)]:text-left [&_table_td:nth-child(3)]:text-left [&_table_td:nth-child(3)]:align-top [&_table_td:nth-child(3)_code]:!whitespace-nowrap [&_table_td:nth-child(3)_code]:bg-transparent [&_table_td:nth-child(3)_code]:px-0 [&_table_th:nth-child(4)]:w-auto [&_table_td:nth-child(4)]:w-auto [&_table_th:nth-child(4)]:!whitespace-normal [&_table_td:nth-child(4)]:!whitespace-normal [&_table_td:nth-child(4)]:break-words [&_table_td:nth-child(4)]:[overflow-wrap:anywhere]"
       : ""
   const plainTableClassName = plainTables
-    ? "[&_table]:table-fixed [&_table]:w-full [&_table_th]:whitespace-normal [&_table_td]:whitespace-normal [&_table_th]:break-words [&_table_td]:break-words [&_table_th]:[overflow-wrap:anywhere] [&_table_td]:[overflow-wrap:anywhere]"
+    ? "[&_table]:table-auto [&_table]:w-full [&_table_th]:whitespace-normal [&_table_td]:whitespace-normal [&_table_th]:break-words [&_table_td]:break-words"
     : ""
   const listClassName = compactLists
     ? "[&_ul]:!my-2 [&_ol]:!my-2 [&_ul]:!pl-0 [&_ol]:!pl-0 [&_li]:!list-none [&_li]:!pl-0 [&_li]:text-[0.95em] [&_li]:leading-relaxed [&_li>p]:inline [&_li>p]:my-0"

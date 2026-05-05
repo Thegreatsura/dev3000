@@ -369,8 +369,12 @@ function stableImportedRunnerId(teamId: string, canonicalPath: string): string {
 
 const HOSTED_TEAM_SLUGS = new Set(["vercel", "vercel-labs"])
 
+function canUseHostedExecutionMode(team: { slug: string }): boolean {
+  return HOSTED_TEAM_SLUGS.has(team.slug)
+}
+
 export function getDefaultExecutionMode(team: { slug: string }): "hosted" | "self-hosted" {
-  return HOSTED_TEAM_SLUGS.has(team.slug) ? "hosted" : "self-hosted"
+  return canUseHostedExecutionMode(team) ? "hosted" : "self-hosted"
 }
 
 function buildEmptyTeamState(team: DevAgentTeam): SkillRunnerTeamState {
@@ -409,12 +413,14 @@ function normalizeTeamState(raw: SkillRunnerTeamState | null, team: DevAgentTeam
   const fallback = buildEmptyTeamState(team)
   if (!raw) return fallback
 
-  const executionMode =
+  const storedExecutionMode =
     raw.settings?.executionMode === "self-hosted"
       ? "self-hosted"
       : raw.settings?.executionMode === "hosted"
         ? "hosted"
         : getDefaultExecutionMode(team)
+  const executionMode =
+    storedExecutionMode === "hosted" && !canUseHostedExecutionMode(team) ? "self-hosted" : storedExecutionMode
   const workerBaseUrl = normalizeWorkerBaseUrl(raw.settings?.workerBaseUrl)
   const workerProjectId = raw.settings?.workerProjectId?.trim() || undefined
   const workerStatus =
@@ -478,10 +484,12 @@ export async function updateSkillRunnerTeamSettings(
 ): Promise<SkillRunnerTeamSettings> {
   const state = await getTeamSkillRunnerState(team)
 
-  const executionMode =
+  const requestedExecutionMode =
     input.executionMode === "self-hosted" || input.executionMode === "hosted"
       ? input.executionMode
       : state.settings.executionMode
+  const executionMode =
+    requestedExecutionMode === "hosted" && !canUseHostedExecutionMode(team) ? "self-hosted" : requestedExecutionMode
   const workerBaseUrl =
     input.workerBaseUrl !== undefined ? normalizeWorkerBaseUrl(input.workerBaseUrl) : state.settings.workerBaseUrl
   const workerProjectId =
