@@ -15,7 +15,7 @@ import type {
 const ASH_PACKAGE_NAME = "experimental-ash"
 const ASH_PACKAGE_VERSION = "0.3.0-alpha.31"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
-const ASH_ARTIFACT_FORMAT_VERSION = 14
+const ASH_ARTIFACT_FORMAT_VERSION = 15
 
 export interface DevAgentAshArtifact {
   framework: "experimental-ash"
@@ -315,6 +315,7 @@ export default defineRoute({
       return Response.json({ error: "Missing or empty 'message' field.", ok: false }, { status: 400 });
     }
 
+    const shouldAwaitResult = (payload as { awaitResult?: unknown }).awaitResult !== false;
     const continuationToken = \`http-task:\${crypto.randomUUID()}\`;
     const handle = await ctx.agent.run({
       adapter: { kind: "http" },
@@ -325,6 +326,24 @@ export default defineRoute({
     });
 
     const streamPath = \`/.well-known/ash/v1/sessions/\${encodeURIComponent(handle.sessionId)}/stream\`;
+
+    if (!shouldAwaitResult) {
+      return Response.json(
+        {
+          continuationToken: handle.continuationToken,
+          ok: true,
+          sessionId: handle.sessionId,
+          streamPath,
+          terminalState: "running",
+        },
+        {
+          headers: {
+            "cache-control": "no-store",
+          },
+          status: 202,
+        },
+      );
+    }
 
     try {
       const result = await handle.result;

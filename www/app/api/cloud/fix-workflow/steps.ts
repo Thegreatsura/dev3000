@@ -44,6 +44,8 @@ const ASH_TASK_ROUTE_PATH = "/.well-known/ash/v1/task"
 const ASH_STREAM_INITIAL_IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const ASH_STREAM_ACTIVE_IDLE_TIMEOUT_MS = 15 * 60 * 1000
 const ASH_STREAM_RECONNECT_POLL_MS = 30 * 1000
+const ASH_SESSION_POLL_INTERVAL_MS = 2000
+const ASH_SESSION_POLL_TIMEOUT_MS = 25 * 60 * 1000
 const ASH_DIAGNOSTIC_HTTP_TIMEOUT_MS = 8000
 const ASH_DIAGNOSTIC_SANDBOX_TIMEOUT_MS = 15000
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
@@ -5734,6 +5736,300 @@ function extractAshRuntimeTaskTerminalState(payload: {
   return null
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function collectAshRuntimePayloadRecords(payload: unknown): Record<string, unknown>[] {
+  const root = asRecord(payload)
+  if (!root) return []
+
+  const records: Record<string, unknown>[] = [root]
+  for (const key of ["run", "session", "data", "result"]) {
+    const nested = asRecord(root[key])
+    if (nested) records.push(nested)
+  }
+
+  return records
+}
+
+function normalizeAshRuntimeSessionState(value: unknown): "waiting" | "completed" | "failed" | null {
+  if (typeof value !== "string") return null
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return null
+
+  if (["completed", "complete", "done", "success", "succeeded"].includes(normalized)) {
+    return "completed"
+  }
+
+  if (["failed", "failure", "error", "errored", "cancelled", "canceled"].includes(normalized)) {
+    return "failed"
+  }
+
+  if (["waiting", "running", "pending", "queued", "started", "active", "in_progress"].includes(normalized)) {
+    return "waiting"
+  }
+
+  return null
+}
+
+function extractAshRuntimeSessionPollState(payload: unknown): "waiting" | "completed" | "failed" | null {
+  for (const record of collectAshRuntimePayloadRecords(payload)) {
+    for (const key of ["terminalState", "status", "state", "phase", "readyState"]) {
+      const state = normalizeAshRuntimeSessionState(record[key])
+      if (state) return state
+    }
+
+    if (record.error) {
+      return "failed"
+    }
+  }
+
+  return null
+}
+
+function extractAshRuntimeSessionErrorText(payload: unknown): string {
+  for (const record of collectAshRuntimePayloadRecords(payload)) {
+    const directError = record.error
+    if (typeof directError === "string" && directError.trim()) return directError.trim()
+    const errorRecord = asRecord(directError)
+    if (errorRecord) {
+      const message = errorRecord.message
+      if (typeof message === "string" && message.trim()) return message.trim()
+    }
+
+    const message = record.message
+    if (typeof message === "string" && message.trim()) return message.trim()
+  }
+
+  return "ASH runtime session failed"
+}
+
+function extractAshRuntimeTextFromPayload(payload: unknown): string {
+  for (const record of collectAshRuntimePayloadRecords(payload)) {
+    const resultText = extractAshRuntimeTaskResultText({
+      result: record.result,
+      resultText: record.resultText,
+      summary: record.summary
+    })
+    if (resultText) return resultText
+
+    for (const key of ["output", "message", "text"]) {
+      const value = record[key]
+      if (typeof value === "string" && value.trim()) {
+        return value.trim()
+      }
+    }
+  }
+
+  return ""
+}
+
+function extractAshRuntimeEvents(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload
+
+  const record = asRecord(payload)
+  if (!record) return []
+
+  for (const key of ["events", "items", "rows", "results"]) {
+    const value = record[key]
+    if (Array.isArray(value)) return value
+  }
+
+  const data = record.data
+  if (Array.isArray(data)) return data
+  if (data && typeof data === "object") return extractAshRuntimeEvents(data)
+
+  return []
+}
+
+function summarizeAshRuntimeEvents(events: unknown[]): {
+  rawEvents: string[]
+  resultText: string
+  usage: AshRuntimeUsage
+} {
+  let finalCompletedMessage = ""
+  let lastCompletedMessage = ""
+  let promptTokens = 0
+  let completionTokens = 0
+  let cacheReadTokens = 0
+  let cacheCreationTokens = 0
+
+  const rawEvents = events.map((event) => {
+    if (typeof event === "string") return event
+    try {
+      return JSON.stringify(event)
+    } catch {
+      return String(event)
+    }
+  })
+
+  for (const event of events) {
+    let eventRecord = asRecord(event)
+    if (!eventRecord && typeof event === "string") {
+      try {
+        eventRecord = asRecord(JSON.parse(event))
+      } catch {
+        eventRecord = null
+      }
+    }
+    if (!eventRecord) continue
+
+    const type = typeof eventRecord.type === "string" ? eventRecord.type : ""
+    const data = asRecord(eventRecord.data) || eventRecord
+    if (type === "message.completed") {
+      const message =
+        typeof data.message === "string"
+          ? data.message.trim()
+          : typeof data.output === "string"
+            ? data.output.trim()
+            : ""
+      if (message) {
+        lastCompletedMessage = message
+        if (data.finishReason !== "tool-calls") {
+          finalCompletedMessage = message
+        }
+      }
+    }
+
+    if (type === "step.completed") {
+      const usage = asRecord(data.usage)
+      promptTokens += typeof usage?.inputTokens === "number" ? usage.inputTokens : 0
+      completionTokens += typeof usage?.outputTokens === "number" ? usage.outputTokens : 0
+      cacheReadTokens += typeof usage?.cacheReadTokens === "number" ? usage.cacheReadTokens : 0
+      cacheCreationTokens += typeof usage?.cacheWriteTokens === "number" ? usage.cacheWriteTokens : 0
+    }
+  }
+
+  return {
+    rawEvents,
+    resultText: finalCompletedMessage || lastCompletedMessage,
+    usage: {
+      promptTokens,
+      completionTokens,
+      cacheReadTokens,
+      cacheCreationTokens,
+      totalTokens: promptTokens + completionTokens + cacheReadTokens + cacheCreationTokens
+    }
+  }
+}
+
+async function fetchAshRuntimeJson(
+  baseUrl: string,
+  authorization: string,
+  path: string
+): Promise<{ bodyText: string; ok: boolean; payload: unknown; status: number }> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), ASH_DIAGNOSTIC_HTTP_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(new URL(path, baseUrl), {
+      headers: { authorization, "cache-control": "no-store" },
+      signal: controller.signal
+    })
+    const bodyText = await response.text()
+    let payload: unknown = null
+    if (bodyText.trim()) {
+      try {
+        payload = JSON.parse(bodyText)
+      } catch {
+        payload = bodyText
+      }
+    }
+
+    return {
+      bodyText,
+      ok: response.ok,
+      payload,
+      status: response.status
+    }
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+async function fetchAshRuntimeSessionEvents(
+  baseUrl: string,
+  authorization: string,
+  sessionId: string
+): Promise<unknown[]> {
+  const encodedSessionId = encodeURIComponent(sessionId)
+  const response = await fetchAshRuntimeJson(
+    baseUrl,
+    authorization,
+    `/api/runs/${encodedSessionId}/events?sortOrder=asc&limit=500`
+  )
+  return response.ok ? extractAshRuntimeEvents(response.payload) : []
+}
+
+async function pollAshRuntimeSession(
+  baseUrl: string,
+  authorization: string,
+  sessionId: string,
+  progressContext?: ProgressContext | null,
+  diagnostics?: AshRuntimeDiagnostics
+): Promise<{
+  rawEvents: string[]
+  resultText: string
+  terminalState: "waiting" | "completed"
+  usage: AshRuntimeUsage
+}> {
+  const encodedSessionId = encodeURIComponent(sessionId)
+  const deadline = Date.now() + ASH_SESSION_POLL_TIMEOUT_MS
+  let lastError = ""
+  let lastLogAt = 0
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetchAshRuntimeJson(baseUrl, authorization, `/api/runs/${encodedSessionId}`)
+      if (!response.ok) {
+        lastError = `run endpoint returned ${response.status}: ${formatAshDiagnosticText(response.bodyText, 300)}`
+      } else {
+        const state = extractAshRuntimeSessionPollState(response.payload)
+        if (state === "failed") {
+          throw new Error(extractAshRuntimeSessionErrorText(response.payload))
+        }
+
+        if (state === "completed") {
+          const events = await fetchAshRuntimeSessionEvents(baseUrl, authorization, sessionId).catch(() => [])
+          const eventSummary = summarizeAshRuntimeEvents(events)
+          const resultText = extractAshRuntimeTextFromPayload(response.payload) || eventSummary.resultText
+          await appendProgressLog(
+            progressContext,
+            `[Agent] Analysis session completed${resultText ? `: ${formatClaudeOutputPreview(resultText, 180)}` : "."}`
+          )
+          return {
+            rawEvents: eventSummary.rawEvents,
+            resultText,
+            terminalState: "completed",
+            usage: eventSummary.usage.totalTokens > 0 ? eventSummary.usage : normalizeAshRuntimeUsage(response.payload)
+          }
+        }
+
+        if (Date.now() - lastLogAt > 30000) {
+          lastLogAt = Date.now()
+          await appendProgressLog(progressContext, `[ASH] Analysis session still running: ${sessionId}`)
+        }
+      }
+    } catch (error) {
+      lastError = formatErrorMessage(error)
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, ASH_SESSION_POLL_INTERVAL_MS))
+  }
+
+  const diagnosticText = diagnostics ? await diagnostics(sessionId).catch((error) => formatErrorMessage(error)) : ""
+  throw new Error(
+    [
+      `Timed out waiting for ASH runtime session ${sessionId}`,
+      lastError ? `Last error: ${lastError}` : "",
+      diagnosticText ? `Diagnostics:\n${diagnosticText}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+  )
+}
+
 async function readAshRuntimeSessionStream(
   baseUrl: string,
   authorization: string,
@@ -6128,7 +6424,7 @@ async function streamAshRuntimeTask(
       authorization,
       "content-type": "application/json"
     },
-    body: JSON.stringify({ message: prompt })
+    body: JSON.stringify({ awaitResult: false, message: prompt })
   })
 
   const taskPayloadText = await taskResponse.text()
@@ -6174,7 +6470,7 @@ async function streamAshRuntimeTask(
   }
   await appendProgressLog(progressContext, `[Agent] Analysis session started: ${sessionId}`)
   const directTerminalState = extractAshRuntimeTaskTerminalState(taskPayload)
-  if (directTerminalState) {
+  if (directTerminalState === "completed") {
     const resultText = extractAshRuntimeTaskResultText(taskPayload)
     await appendProgressLog(
       progressContext,
@@ -6188,15 +6484,27 @@ async function streamAshRuntimeTask(
       usage: normalizeAshRuntimeUsage(taskPayload.usage)
     }
   }
+  if (directTerminalState === "waiting") {
+    await appendProgressLog(progressContext, `[ASH] Analysis session waiting: ${sessionId}`)
+  }
 
-  const streamResult = await readAshRuntimeSessionStream(
-    baseUrl,
-    authorization,
-    sessionId,
-    taskPayload.streamPath,
-    progressContext,
-    diagnostics
-  )
+  let streamResult: Awaited<ReturnType<typeof readAshRuntimeSessionStream>>
+  try {
+    streamResult = await readAshRuntimeSessionStream(
+      baseUrl,
+      authorization,
+      sessionId,
+      taskPayload.streamPath,
+      progressContext,
+      diagnostics
+    )
+  } catch (error) {
+    await appendProgressLog(
+      progressContext,
+      `[ASH] Runtime stream unavailable; polling session (${formatClaudeOutputPreview(formatErrorMessage(error), 220)})`
+    )
+    streamResult = await pollAshRuntimeSession(baseUrl, authorization, sessionId, progressContext, diagnostics)
+  }
 
   return {
     rawEvents: streamResult.rawEvents,
