@@ -433,7 +433,7 @@ export const DEEPSEC_DEV_AGENT_DESCRIPTION =
   "Install DeepSec, bootstrap project-specific context, run a bounded first-pass security scan, and generate a report."
 
 export const DEEPSEC_DEV_AGENT_INSTRUCTIONS =
-  "Run DeepSec against the selected project checkout without starting a dev server. Initialize the .deepsec workspace if needed, install dependencies, fill INFO.md with concise project-specific security context, run the regex scan, process a bounded first pass with AI Gateway credentials from the environment, and generate a markdown report that dev3000 can show and make available for download. Do not write secrets to files. Do not run an unbounded DeepSec process unless run-specific instructions explicitly request a full scan."
+  "Run DeepSec against the selected project checkout without starting a dev server. Initialize the .deepsec workspace if needed, install dependencies, fill INFO.md with concise project-specific security context, run the regex scan, process a bounded first pass with AI Gateway credentials from the environment, and generate a markdown report that dev3000 can show and make available for download. If the DeepSec processing pass fails, stop and report the failure instead of generating a manual fallback report. Do not write secrets to files. Do not run an unbounded DeepSec process unless run-specific instructions explicitly request a full scan."
 
 export const DEEPSEC_DEV_AGENT_ACTION_STEPS: DevAgentActionStep[] = [
   {
@@ -454,7 +454,7 @@ export const DEEPSEC_DEV_AGENT_ACTION_STEPS: DevAgentActionStep[] = [
     kind: "send-prompt",
     config: {
       prompt:
-        "Run `deepsec scan`, then run the default bounded AI processing pass: `deepsec process --limit 25 --concurrency 2 --batch-size 3` unless the user explicitly requested a full scan."
+        "Run `deepsec scan`, then run the default bounded AI processing pass: `deepsec process --limit 25 --concurrency 2 --batch-size 3` unless the user explicitly requested a full scan. If processing fails, stop and surface the failure instead of substituting manual findings."
     }
   },
   {

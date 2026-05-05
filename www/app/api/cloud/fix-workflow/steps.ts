@@ -8384,6 +8384,10 @@ async function runAgentWithDiagnoseTool(
 
   if (devAgentAshTarballUrl) {
     try {
+      if (workflowTypeForPrompt === "deepsec-security-scan") {
+        await appendProgressLog(progressContext, "[Claude] Ensuring Claude Code CLI is available for DeepSec...")
+        await ensureClaudeCodeInstalledInSandbox(sandbox, progressContext)
+      }
       await appendProgressLog(progressContext, `[Agent] Starting ${devAgentName || "agent"}...`)
       return await runAshAgentInSandbox(
         sandbox,

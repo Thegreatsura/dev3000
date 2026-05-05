@@ -40,6 +40,7 @@ Use this skill to turn the manual DeepSec workflow into a repeatable dev3000 run
    - Default command: `corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3`.
    - If the candidate set is below the limit, state that all discovered candidates were processed.
    - If the user explicitly requested a full run, use the requested limit/concurrency or omit `--limit`.
+   - If the process command fails, stop and report the failure. Do not generate a manual fallback report from regex candidates.
 7. Generate the findings report:
    - Run `corepack pnpm deepsec export --format md-dir --out ./findings`.
    - If there are no findings, create `.deepsec/findings/README.md` summarizing that this bounded pass found no findings and include the exact commands that were run.
