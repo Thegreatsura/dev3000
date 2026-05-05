@@ -664,6 +664,12 @@ function getGeneratedReportScanScope(markdown: string): GeneratedReportScanScope
   return scope
 }
 
+function getGeneratedReportCommandsRun(markdown: string): string {
+  const commandsSection = extractGeneratedReportSection(markdown, /^Commands Run$/i)
+  const fencedCommandsMatch = commandsSection.match(/^```[^\n]*\n([\s\S]*?)\n```$/)
+  return (fencedCommandsMatch ? fencedCommandsMatch[1] : commandsSection).trim()
+}
+
 function stripGeneratedReportWebOnlySections(markdown: string): string {
   const lines = markdown.split("\n")
   const output: string[] = []
@@ -672,7 +678,8 @@ function stripGeneratedReportWebOnlySections(markdown: string): string {
     /^Report Location$/i,
     /^Scan Scope$/i,
     /^Next Steps\s*[—–-]\s*Full Scan$/i,
-    /^Git Safety$/i
+    /^Git Safety$/i,
+    /^Commands Run$/i
   ]
 
   for (const line of lines) {
@@ -1497,6 +1504,8 @@ function ReportContentBody({ run, report, runsHref }: { run: WorkflowRun; report
     workflowType === "deepsec-security-scan" ? getGeneratedReportCostUsd(generatedReportMarkdown) : null
   const generatedReportScanScope =
     workflowType === "deepsec-security-scan" ? getGeneratedReportScanScope(generatedReportMarkdown) : {}
+  const generatedReportCommandsRun =
+    workflowType === "deepsec-security-scan" ? getGeneratedReportCommandsRun(generatedReportMarkdown) : ""
   const costValue =
     typeof generatedReportCost === "number"
       ? formatUsd(generatedReportCost)
@@ -2035,7 +2044,11 @@ function ReportContentBody({ run, report, runsHref }: { run: WorkflowRun; report
         </ReportSection>
       ) : null}
 
-      {progressLogs.length > 0 || run.sandboxUrl || typeof normalizedStepNumber === "number" || run.currentStep ? (
+      {progressLogs.length > 0 ||
+      generatedReportCommandsRun ||
+      run.sandboxUrl ||
+      typeof normalizedStepNumber === "number" ||
+      run.currentStep ? (
         <section className="rounded-lg border border-border/70 bg-card/40 p-4">
           <details className="group">
             <summary className="flex cursor-pointer list-none items-start gap-3 text-left [&::-webkit-details-marker]:hidden">
@@ -2081,6 +2094,17 @@ function ReportContentBody({ run, report, runsHref }: { run: WorkflowRun; report
               ) : null}
 
               {run.currentStep ? <div className="text-xs text-muted-foreground">{run.currentStep}</div> : null}
+
+              {generatedReportCommandsRun ? (
+                <div>
+                  <div className="mb-2 text-xs font-medium text-muted-foreground">Commands run</div>
+                  <textarea
+                    readOnly
+                    value={generatedReportCommandsRun}
+                    className="h-40 w-full resize-none rounded-md border border-border bg-muted/30 px-3 py-2 text-xs font-mono leading-relaxed"
+                  />
+                </div>
+              ) : null}
 
               {progressLogs.length > 0 ? (
                 <div>
