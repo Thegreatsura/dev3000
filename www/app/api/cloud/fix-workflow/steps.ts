@@ -5621,6 +5621,10 @@ async function readAshRuntimeSessionStream(
 
     if (!streamResponse.ok || !streamResponse.body) {
       const bodyText = await streamResponse.text()
+      if (isAshRuntimeRetryableStreamHttpFailure(streamResponse.status, bodyText)) {
+        await reconnect(`stream route returned ${streamResponse.status}: ${formatAshDiagnosticText(bodyText, 300)}`)
+        continue
+      }
       throw new Error(`ASH runtime stream failed (${streamResponse.status}): ${bodyText}`)
     }
 
@@ -5745,6 +5749,16 @@ function isAshRuntimeStreamDisconnectError(error: unknown): boolean {
     error.message === "fetch failed" ||
     code === "UND_ERR_SOCKET" ||
     /abort|cancel|disconnect|premature close|socket|terminated/i.test(error.message)
+  )
+}
+
+function isAshRuntimeRetryableStreamHttpFailure(status: number, bodyText: string): boolean {
+  if (status < 500 || status > 599) {
+    return false
+  }
+
+  return /abort|cancel|disconnect|fetch failed|httpError|premature close|socket|terminated|ECONNRESET|EPIPE/i.test(
+    bodyText
   )
 }
 
