@@ -10,7 +10,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ run
   const subtitle = isDeepsec
     ? "Find security issues in your Vercel project before they reach production."
     : profile?.description || "Run a high-confidence AI skill against your Vercel project."
-  const eyebrow = isDeepsec ? "DeepSec on dev3000" : "dev3000 skill runner"
+  const eyebrow = isDeepsec ? "DeepSec Security Scan" : "Skill runner"
 
   return new ImageResponse(
     <div
@@ -58,7 +58,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ run
 
         <div style={footerStyle}>
           <div style={ctaStyle}>Run the scan</div>
-          <div style={brandStyle}>dev3000.ai</div>
+          <div style={brandStyle}>Get a focused security report</div>
         </div>
       </main>
 
