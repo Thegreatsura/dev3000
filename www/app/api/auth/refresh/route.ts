@@ -1,6 +1,5 @@
-import { cookies } from "next/headers"
-import { NextResponse } from "next/server"
-import { getVercelApiAccessToken } from "@/lib/auth"
+import { type NextRequest, NextResponse } from "next/server"
+import { getAuthorizePath, sanitizeAuthRedirectPath } from "@/lib/auth-redirect"
 
 interface RefreshTokenResponse {
   access_token: string
@@ -11,28 +10,24 @@ interface RefreshTokenResponse {
   refresh_token: string
 }
 
-/**
- * Get the current access token from cookies
- * This allows the client to retrieve the token for cross-origin API calls
- */
-export async function GET() {
-  const accessToken = await getVercelApiAccessToken()
+export async function GET(request: NextRequest) {
+  const returnTo = sanitizeAuthRedirectPath(request.nextUrl.searchParams.get("next"))
+  const refreshToken = request.cookies.get("refresh_token")?.value
 
-  if (!accessToken) {
-    const cookieStore = await cookies()
-    const refreshToken = cookieStore.get("refresh_token")?.value
-    const tokenData = refreshToken ? await refreshAccessToken(refreshToken) : null
+  if (!refreshToken) {
+    return NextResponse.redirect(new URL(getAuthorizePath(returnTo), request.url))
+  }
 
-    if (!tokenData) {
-      return Response.json({ error: "Not authenticated" }, { status: 401 })
-    }
-
-    const response = NextResponse.json({ accessToken: tokenData.access_token })
-    setAuthCookies(response, tokenData)
+  const tokenData = await refreshAccessToken(refreshToken)
+  if (!tokenData) {
+    const response = NextResponse.redirect(new URL(getAuthorizePath(returnTo), request.url))
+    clearAuthCookies(response)
     return response
   }
 
-  return Response.json({ accessToken })
+  const response = NextResponse.redirect(new URL(returnTo, request.url))
+  setAuthCookies(response, tokenData)
+  return response
 }
 
 async function refreshAccessToken(refreshToken: string): Promise<RefreshTokenResponse | null> {
@@ -54,13 +49,13 @@ async function refreshAccessToken(refreshToken: string): Promise<RefreshTokenRes
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "")
-      console.error("[Auth Token] Failed to refresh token:", response.status, errorText.slice(0, 500))
+      console.error("[Auth Refresh] Failed to refresh token:", response.status, errorText.slice(0, 500))
       return null
     }
 
     return (await response.json()) as RefreshTokenResponse
   } catch (error) {
-    console.error("[Auth Token] Error refreshing token:", error)
+    console.error("[Auth Refresh] Error refreshing token:", error)
     return null
   }
 }
@@ -83,4 +78,13 @@ function setAuthCookies(response: NextResponse, tokenData: RefreshTokenResponse)
     path: "/",
     maxAge: 60 * 60 * 24 * 30
   })
+}
+
+function clearAuthCookies(response: NextResponse) {
+  for (const cookieName of ["access_token", "refresh_token"]) {
+    response.cookies.set(cookieName, "", {
+      path: "/",
+      maxAge: 0
+    })
+  }
 }

@@ -31,6 +31,12 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
+  if (isPageRequest(request)) {
+    const refreshUrl = new URL("/api/auth/refresh", request.url)
+    refreshUrl.searchParams.set("next", `${request.nextUrl.pathname}${request.nextUrl.search}`)
+    return NextResponse.redirect(refreshUrl)
+  }
+
   // Access token expired but we have a refresh token — attempt silent refresh
   const newTokens = await attemptRefresh(refreshToken)
 
@@ -74,16 +80,32 @@ async function attemptRefresh(refreshToken: string): Promise<RefreshTokenRespons
     })
 
     if (!response.ok) {
-      console.error("[Middleware] Failed to refresh token:", response.status)
+      const errorText = await response.text().catch(() => "")
+      console.error("[Proxy] Failed to refresh token:", response.status, errorText.slice(0, 500))
       return null
     }
 
     const tokenData: RefreshTokenResponse = await response.json()
     return tokenData
   } catch (error) {
-    console.error("[Middleware] Error refreshing token:", error)
+    console.error("[Proxy] Error refreshing token:", error)
     return null
   }
+}
+
+function isPageRequest(request: NextRequest): boolean {
+  if (request.method !== "GET") return false
+
+  const pathname = request.nextUrl.pathname
+  if (pathname.startsWith("/api/")) return false
+
+  const accept = request.headers.get("accept") || ""
+  return (
+    accept.includes("text/html") ||
+    accept.includes("text/x-component") ||
+    request.headers.get("rsc") === "1" ||
+    request.headers.has("next-router-state-tree")
+  )
 }
 
 export const config = {

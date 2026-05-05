@@ -28,8 +28,7 @@ export async function GET(req: NextRequest) {
     // Include project env var scopes so workflow sandbox setup can read NPM_TOKEN and other
     // private package auth variables directly from the selected project configuration.
     scope:
-      "openid email profile offline_access user team project project.write deployment deployment.write project-env-vars global-project-env-vars",
-    prompt: "consent"
+      "openid email profile offline_access user team project project.write deployment deployment.write project-env-vars global-project-env-vars"
   })
 
   const authorizationUrl = `https://vercel.com/oauth/authorize?${queryParams.toString()}`

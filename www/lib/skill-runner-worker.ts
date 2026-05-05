@@ -99,7 +99,7 @@ interface VercelApiErrorPayload {
 interface VercelProjectEnvInput {
   key: string
   value: string
-  type: "encrypted"
+  type: "encrypted" | "plain"
   target: Array<"production" | "preview" | "development">
 }
 
@@ -468,7 +468,7 @@ function buildWorkerEnvInputs(workerShellVersion: string | undefined): VercelPro
     {
       key: SKILL_RUNNER_WORKER_MODE_ENV,
       value: "1",
-      type: "encrypted",
+      type: "plain",
       target: ["production", "preview", "development"]
     }
   ]
@@ -477,7 +477,7 @@ function buildWorkerEnvInputs(workerShellVersion: string | undefined): VercelPro
     inputs.push({
       key: SKILL_RUNNER_WORKER_SHELL_VERSION_ENV,
       value: workerShellVersion,
-      type: "encrypted",
+      type: "plain",
       target: ["production", "preview", "development"]
     })
   }
