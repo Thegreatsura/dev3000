@@ -5926,7 +5926,7 @@ async function streamAshRuntimeTask(
   if (!sessionId) {
     throw new Error("ASH runtime task route did not return a session id.")
   }
-  await appendProgressLog(progressContext, "[Agent] Analysis session started")
+  await appendProgressLog(progressContext, `[Agent] Analysis session started: ${sessionId}`)
   const streamResult = await readAshRuntimeSessionStream(
     baseUrl,
     authorization,

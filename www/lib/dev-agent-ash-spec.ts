@@ -15,7 +15,7 @@ import type {
 const ASH_PACKAGE_NAME = "experimental-ash"
 const ASH_PACKAGE_VERSION = "0.3.0-alpha.31"
 const ASH_RUNTIME_VERSION = `${ASH_PACKAGE_NAME}@${ASH_PACKAGE_VERSION}`
-const ASH_ARTIFACT_FORMAT_VERSION = 11
+const ASH_ARTIFACT_FORMAT_VERSION = 12
 
 export interface DevAgentAshArtifact {
   framework: "experimental-ash"
@@ -89,6 +89,27 @@ function formatSandboxBrowser(browser: DevAgentSandboxBrowser): string {
 function formatAiAgent(aiAgent?: DevAgentAiAgent): string {
   if (aiAgent === "anthropic/claude-sonnet-4.6") return "anthropic/claude-sonnet-4.6"
   return "anthropic/claude-opus-4.6"
+}
+
+function isDeepSecAshInput(input: DevAgentAshInput): boolean {
+  return input.id.trim().toLowerCase() === "deepsec" || input.name.trim().toLowerCase() === "deepsec security scan"
+}
+
+function renderDeepSecRuntimeNotes(input: DevAgentAshInput): string {
+  if (!isDeepSecAshInput(input)) return ""
+
+  return `## DeepSec Runtime Notes
+
+- Use shell commands for project file inspection and file writes. Prefer \`test -f\`, \`cat\`, \`sed\`, \`find\`, and \`grep\` inside \`/workspace/repo\`.
+- Optional project files may be absent. Check before reading optional files such as \`CLAUDE.md\`, \`AGENTS.md\`, and framework config files.
+`
+}
+
+function renderDisabledFrameworkTool(): string {
+  return `import { disableTool } from "experimental-ash/tools";
+
+export default disableTool();
+`
 }
 
 function formatActionStep(step: DevAgentActionStep, index: number): string {
@@ -210,6 +231,8 @@ ${input.description.trim()}
 ## Primary Instructions
 
 ${normalizedInstructions || "No freeform instructions were provided. Follow the configured action plan and evaluation criteria."}
+
+${renderDeepSecRuntimeNotes(input)}
 
 ## Action Plan
 
@@ -727,6 +750,8 @@ ${input.description.trim()}
 
 ${normalizeMultiline(input.instructions) || "No freeform instructions were provided. Follow the configured action steps and evaluation criteria."}
 
+${renderDeepSecRuntimeNotes(input)}
+
 ## Runtime Contract
 
 - Execution mode: ${formatExecutionMode(input.executionMode)}
@@ -884,6 +909,18 @@ export async function createDevAgentAshSource(input: DevAgentAshInput, revision:
   const sourceLabel = `${input.name.trim()} v${revision}`
   const packagedSkillData = await resolvePackagedSkillFiles(input)
   const packagedSkills = [...packagedSkillData.packagedSkills, "dev3000-agent-runbook"]
+  const disabledFrameworkTools = isDeepSecAshInput(input)
+    ? [
+        {
+          path: "agent/tools/read_file.ts",
+          content: renderDisabledFrameworkTool()
+        },
+        {
+          path: "agent/tools/write_file.ts",
+          content: renderDisabledFrameworkTool()
+        }
+      ]
+    : []
   const files = [
     {
       path: "package.json",
@@ -999,6 +1036,7 @@ export async function createDevAgentAshSource(input: DevAgentAshInput, revision:
       path: "agent/skills/dev3000-agent-runbook/SKILL.md",
       content: renderExecutionRunbookSkill(input)
     },
+    ...disabledFrameworkTools,
     ...packagedSkillData.files
   ]
 
