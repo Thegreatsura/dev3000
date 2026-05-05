@@ -1,11 +1,9 @@
 import { execFileSync } from "node:child_process"
 import {
   SKILL_RUNNER_RUNTIME_MANIFEST_VERSION,
-  SKILL_RUNNER_WORKER_MODE_ENV,
   SKILL_RUNNER_WORKER_PROJECT_NAME,
   SKILL_RUNNER_WORKER_REPO,
   SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
-  SKILL_RUNNER_WORKER_SHELL_VERSION_ENV,
   type SkillRunnerWorkerStatus,
   type SkillRunnerWorkerVersionPayload
 } from "@/lib/skill-runner-config"
@@ -76,6 +74,8 @@ interface VercelDeploymentDetailsResponse {
   meta?: {
     githubCommitSha?: string
     gitCommitSha?: string
+    d3kSkillRunnerShellCommit?: string
+    d3kSkillRunnerShellVersion?: string
     githubCommitRef?: string
     gitCommitRef?: string
   }
@@ -94,13 +94,6 @@ interface VercelApiErrorPayload {
     link?: string
     repo?: string
   }
-}
-
-interface VercelProjectEnvInput {
-  key: string
-  value: string
-  type: "encrypted" | "plain"
-  target: Array<"production" | "preview" | "development">
 }
 
 interface VercelProjectEnvListResponse {
@@ -147,7 +140,7 @@ interface VercelBlobStoreCreateResponse {
   }
 }
 
-const ALLOWED_WORKER_ENV_KEYS = [SKILL_RUNNER_WORKER_MODE_ENV, SKILL_RUNNER_WORKER_SHELL_VERSION_ENV] as const
+const LEGACY_WORKER_METADATA_ENV_KEYS = new Set(["SKILL_RUNNER_WORKER_MODE", "SKILL_RUNNER_WORKER_SHELL_VERSION"])
 const REQUIRED_SELF_HOSTED_WORKER_ENV_KEYS = ["BLOB_READ_WRITE_TOKEN"] as const
 const SELF_HOSTED_BLOB_STORE_REGION = "iad1"
 const SELF_HOSTED_BLOB_ENVIRONMENTS = ["production", "preview", "development"] as const
@@ -463,28 +456,6 @@ export function resolveSkillRunnerWorkerStatus(
   return "ready"
 }
 
-function buildWorkerEnvInputs(workerShellVersion: string | undefined): VercelProjectEnvInput[] {
-  const inputs: VercelProjectEnvInput[] = [
-    {
-      key: SKILL_RUNNER_WORKER_MODE_ENV,
-      value: "1",
-      type: "plain",
-      target: ["production", "preview", "development"]
-    }
-  ]
-
-  if (workerShellVersion) {
-    inputs.push({
-      key: SKILL_RUNNER_WORKER_SHELL_VERSION_ENV,
-      value: workerShellVersion,
-      type: "plain",
-      target: ["production", "preview", "development"]
-    })
-  }
-
-  return inputs
-}
-
 async function listTeamBlobStores(accessToken: string, team: VercelTeam) {
   const apiUrl = new URL("https://api.vercel.com/v1/storage/stores")
   apiUrl.searchParams.set("teamId", team.id)
@@ -688,6 +659,20 @@ async function removeWorkerBlobEnvBindings(accessToken: string, team: VercelTeam
   }
 }
 
+async function removeWorkerMetadataEnvVars(accessToken: string, team: VercelTeam, projectId: string): Promise<void> {
+  const envVars = await listProjectEnvVars(accessToken, team, projectId)
+  const staleEnvVars = envVars.filter((envItem) => {
+    const key = envItem.key?.trim()
+    return key && LEGACY_WORKER_METADATA_ENV_KEYS.has(key) && envItem.id?.trim()
+  })
+
+  for (const envVar of staleEnvVars) {
+    const envId = envVar.id?.trim()
+    if (!envId) continue
+    await removeProjectEnvVar(accessToken, team, projectId, envId)
+  }
+}
+
 async function disconnectWorkerBlobStoreConnections(
   accessToken: string,
   team: VercelTeam,
@@ -797,44 +782,6 @@ async function createInitialWorkerDeployment(
   return deploymentId
 }
 
-async function upsertWorkerProjectEnv(
-  accessToken: string,
-  team: VercelTeam,
-  project: SkillRunnerWorkerProject,
-  envInputs: VercelProjectEnvInput[]
-): Promise<void> {
-  if (envInputs.length === 0) return
-  if (project.projectName !== SKILL_RUNNER_WORKER_PROJECT_NAME) {
-    throw new Error(`Refusing to write env vars to unexpected project: ${project.projectName}`)
-  }
-
-  const disallowedEnvKeys = envInputs
-    .map((envInput) => envInput.key)
-    .filter((key) => !ALLOWED_WORKER_ENV_KEYS.includes(key as (typeof ALLOWED_WORKER_ENV_KEYS)[number]))
-  if (disallowedEnvKeys.length > 0) {
-    throw new Error(`Refusing to write disallowed runner env vars: ${disallowedEnvKeys.join(", ")}`)
-  }
-
-  const apiUrl = new URL(`https://api.vercel.com/v10/projects/${project.projectId}/env`)
-  apiUrl.searchParams.set("teamId", team.id)
-  apiUrl.searchParams.set("upsert", "true")
-
-  const response = await fetch(apiUrl.toString(), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(envInputs),
-    cache: "no-store"
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Failed to configure runner project env vars: ${response.status} ${errorText}`)
-  }
-}
-
 async function getWorkerProjectMissingEnvKeys(
   accessToken: string,
   team: VercelTeam,
@@ -895,7 +842,10 @@ async function resolveSkillRunnerWorkerProjectFromLookupProject(
         ? await getDeploymentDetails(accessToken, team, latestDeployment.id)
         : null
   const latestDeploymentGitSha = normalizeGitSha(
-    latestDeploymentDetails?.meta?.githubCommitSha || latestDeploymentDetails?.meta?.gitCommitSha
+    latestDeploymentDetails?.meta?.d3kSkillRunnerShellCommit ||
+      latestDeploymentDetails?.meta?.d3kSkillRunnerShellVersion ||
+      latestDeploymentDetails?.meta?.githubCommitSha ||
+      latestDeploymentDetails?.meta?.gitCommitSha
   )
   const latestDeploymentGitBranch =
     latestDeploymentDetails?.meta?.githubCommitRef?.trim() || latestDeploymentDetails?.meta?.gitCommitRef?.trim()
@@ -931,7 +881,7 @@ async function resolveSkillRunnerWorkerProjectFromLookupProject(
     latestDeploymentGitBranch,
     desiredWorkerBranch,
     desiredWorkerGitSha,
-    workerShellVersion: workerVersion?.workerShellVersion,
+    workerShellVersion: workerVersion?.workerShellVersion || latestDeploymentGitSha,
     workerReportedBranch: workerVersion?.workerBranch,
     runtimeManifestVersion: workerVersion?.runtimeManifestVersion,
     shellVersionStatus
@@ -1061,6 +1011,10 @@ export async function installSkillRunnerWorkerProject(
   team: VercelTeam
 ): Promise<SkillRunnerWorkerProject> {
   const existing = await findSkillRunnerWorkerProject(accessToken, team)
+  if (existing) {
+    await removeWorkerMetadataEnvVars(accessToken, team, existing.projectId)
+  }
+
   if (
     existing?.workerBaseUrl &&
     (!existing.missingEnvKeys || existing.missingEnvKeys.length === 0) &&
@@ -1070,10 +1024,6 @@ export async function installSkillRunnerWorkerProject(
   }
 
   const project = existing ?? (await createWorkerProject(accessToken, team))
-  const desiredWorkerBranch = project.desiredWorkerBranch || resolveWorkerGitBranch()
-  const desiredWorkerShellVersion =
-    project.desiredWorkerGitSha || (await resolveDesiredWorkerGitSha(desiredWorkerBranch))
-  await upsertWorkerProjectEnv(accessToken, team, project, buildWorkerEnvInputs(desiredWorkerShellVersion))
   await ensureWorkerBlobStore(accessToken, team, project)
 
   let deploymentId = project.latestDeploymentId || null

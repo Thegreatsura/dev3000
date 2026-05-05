@@ -19,6 +19,7 @@ import {
 } from "@/lib/dev-agents"
 import { NO_DEV_SERVER_COMMAND } from "@/lib/dev-server-command"
 import type { SkillRunnerTeamSettings } from "@/lib/skill-runner-config"
+import { isHostedSkillRunnerTeamId } from "@/lib/skill-runner-runtime"
 import type { SkillsShSearchResult, SkillsShSkillDetails } from "@/lib/skills-sh"
 import { fetchSkillsShSkillDetails, searchSkillsSh } from "@/lib/skills-sh"
 
@@ -407,7 +408,8 @@ function normalizeTeamState(raw: SkillRunnerTeamState | null, team: DevAgentTeam
   const fallback = buildEmptyTeamState(team)
   if (!raw) return fallback
 
-  const executionMode = "self-hosted"
+  const executionMode =
+    raw.settings?.executionMode === "hosted" && isHostedSkillRunnerTeamId(team.id) ? "hosted" : "self-hosted"
   const workerBaseUrl = normalizeWorkerBaseUrl(raw.settings?.workerBaseUrl)
   const workerProjectId = raw.settings?.workerProjectId?.trim() || undefined
   const workerStatus =
@@ -471,7 +473,9 @@ export async function updateSkillRunnerTeamSettings(
 ): Promise<SkillRunnerTeamSettings> {
   const state = await getTeamSkillRunnerState(team)
 
-  const executionMode = "self-hosted"
+  const requestedExecutionMode = input.executionMode || state.settings.executionMode
+  const executionMode =
+    requestedExecutionMode === "hosted" && isHostedSkillRunnerTeamId(team.id) ? "hosted" : "self-hosted"
   const workerBaseUrl =
     input.workerBaseUrl !== undefined ? normalizeWorkerBaseUrl(input.workerBaseUrl) : state.settings.workerBaseUrl
   const workerProjectId =

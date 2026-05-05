@@ -5,7 +5,7 @@ import { type StartOptions, start } from "workflow/api"
 import { getCurrentUserFromRequest } from "@/lib/auth"
 import { resolveDevAgentRunner } from "@/lib/cloud/dev-agent-runner"
 import { type DevAgent, ensureDevAgentAshArtifactPrepared, getDevAgent, incrementDevAgentUsage } from "@/lib/dev-agents"
-import { SKILL_RUNNER_WORKER_MODE_ENV } from "@/lib/skill-runner-config"
+import { isSelfHostedSkillRunnerRuntime } from "@/lib/skill-runner-runtime"
 import { getSkillRunnerForExecution, getSkillRunnerTeamSettings, incrementSkillRunnerUsage } from "@/lib/skill-runners"
 import {
   buildIdentityProps,
@@ -506,7 +506,7 @@ export async function POST(request: Request) {
         ? body.forwardedAccessToken.trim()
         : undefined
 
-    const isSelfHostedWorker = process.env[SKILL_RUNNER_WORKER_MODE_ENV] === "1"
+    const isSelfHostedWorker = isSelfHostedSkillRunnerRuntime()
     const runtimeOidcToken = process.env.VERCEL_OIDC_TOKEN?.trim() || undefined
     const headerOidcToken = request.headers.get("x-vercel-oidc-token")?.trim() || undefined
     const controlPlaneAiGatewayApiKey = process.env.AI_GATEWAY_API_KEY?.trim() || undefined
@@ -692,7 +692,7 @@ export async function POST(request: Request) {
         )
       }
 
-      if (teamSettings.executionMode === "self-hosted" && process.env[SKILL_RUNNER_WORKER_MODE_ENV] !== "1") {
+      if (teamSettings.executionMode === "self-hosted" && !isSelfHostedWorker) {
         const configuredWorkerBaseUrl = teamSettings.workerBaseUrl?.trim()
 
         if (!teamSettings.workerProjectId || !configuredWorkerBaseUrl) {

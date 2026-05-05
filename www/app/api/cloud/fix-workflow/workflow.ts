@@ -13,7 +13,7 @@
 
 import { readBlobJson } from "@/lib/blob-store"
 import type { DevAgentAshCompiledSpec, DevAgentEarlyExitRule, DevAgentSkillRef } from "@/lib/dev-agents"
-import { SKILL_RUNNER_WORKER_MODE_ENV } from "@/lib/skill-runner-config"
+import { isSelfHostedSkillRunnerRuntime } from "@/lib/skill-runner-runtime"
 import {
   buildTelemetryEvent,
   classifyFailure,
@@ -318,7 +318,7 @@ export async function cloudFixWorkflow(params: {
   const isTurbopackBundleAnalyzer = workflowType === "turbopack-bundle-analyzer"
   const isDeepsecSecurityScan = workflowType === "deepsec-security-scan"
   const skipsBrowserObservation = isTurbopackBundleAnalyzer || isDeepsecSecurityScan
-  const isSelfHostedWorker = process.env[SKILL_RUNNER_WORKER_MODE_ENV] === "1"
+  const isSelfHostedWorker = isSelfHostedSkillRunnerRuntime()
   const sandboxProjectId =
     isSelfHostedWorker && process.env.VERCEL_PROJECT_ID ? process.env.VERCEL_PROJECT_ID : projectId
   const sandboxTeamId =

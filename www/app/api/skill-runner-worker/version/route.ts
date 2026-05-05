@@ -1,10 +1,6 @@
 import { execFileSync } from "node:child_process"
-import {
-  SKILL_RUNNER_RUNTIME_MANIFEST_VERSION,
-  SKILL_RUNNER_WORKER_MODE_ENV,
-  SKILL_RUNNER_WORKER_SHELL_VERSION_ENV,
-  type SkillRunnerWorkerVersionPayload
-} from "@/lib/skill-runner-config"
+import { SKILL_RUNNER_RUNTIME_MANIFEST_VERSION, type SkillRunnerWorkerVersionPayload } from "@/lib/skill-runner-config"
+import { isSelfHostedSkillRunnerRuntime } from "@/lib/skill-runner-runtime"
 
 function resolveCurrentGitBranch(): string | undefined {
   const envBranch = process.env.VERCEL_GIT_COMMIT_REF?.trim()
@@ -39,12 +35,12 @@ function resolveCurrentGitSha(): string | undefined {
 }
 
 function resolveCurrentShellVersion(): string | undefined {
-  return process.env[SKILL_RUNNER_WORKER_SHELL_VERSION_ENV]?.trim() || resolveCurrentGitSha()
+  return resolveCurrentGitSha()
 }
 
 export async function GET() {
   const payload: SkillRunnerWorkerVersionPayload = {
-    workerMode: process.env[SKILL_RUNNER_WORKER_MODE_ENV] === "1" ? "self-hosted-worker" : "control-plane",
+    workerMode: isSelfHostedSkillRunnerRuntime() ? "self-hosted-worker" : "control-plane",
     workerShellVersion: resolveCurrentShellVersion(),
     workerBranch: resolveCurrentGitBranch(),
     runtimeManifestVersion: SKILL_RUNNER_RUNTIME_MANIFEST_VERSION
