@@ -40,7 +40,7 @@ const ASH_RUNTIME_PORT = D3K_ASH_RUNTIME_PORT
 const ASH_RUNTIME_USERNAME = "dev3000"
 const ASH_RUNTIME_ROOT = "/home/vercel-sandbox/.dev3000/ash-apps"
 const ASH_RUNTIME_LOG_DIR = "/home/vercel-sandbox/.d3k/logs"
-const ASH_MESSAGE_ROUTE_PATH = "/.well-known/ash/v1/message"
+const ASH_TASK_ROUTE_PATH = "/.well-known/ash/v1/task"
 const ASH_STREAM_INITIAL_IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const ASH_STREAM_ACTIVE_IDLE_TIMEOUT_MS = 15 * 60 * 1000
 const ASH_STREAM_RECONNECT_POLL_MS = 30 * 1000
@@ -5792,7 +5792,7 @@ async function streamAshRuntimeTask(
     totalTokens: number
   }
 }> {
-  const taskResponse = await fetch(`${baseUrl}${ASH_MESSAGE_ROUTE_PATH}`, {
+  const taskResponse = await fetch(`${baseUrl}${ASH_TASK_ROUTE_PATH}`, {
     method: "POST",
     headers: {
       authorization,
@@ -5818,7 +5818,7 @@ async function streamAshRuntimeTask(
     const responsePreview = taskPayloadText.trim() || "(empty response)"
     throw new Error(
       [
-        `ASH runtime message route returned invalid JSON (${taskResponse.status}): ${responsePreview}`,
+        `ASH runtime task route returned invalid JSON (${taskResponse.status}): ${responsePreview}`,
         diagnosticText ? `Diagnostics:\n${diagnosticText}` : ""
       ]
         .filter(Boolean)
@@ -5827,7 +5827,7 @@ async function streamAshRuntimeTask(
   }
   const sessionId = taskPayload.sessionId
   if (!sessionId) {
-    throw new Error("ASH runtime message route did not return a session id.")
+    throw new Error("ASH runtime task route did not return a session id.")
   }
   await appendProgressLog(progressContext, "[Agent] Analysis session started")
   const streamResult = await readAshRuntimeSessionStream(
