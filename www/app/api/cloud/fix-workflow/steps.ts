@@ -3915,6 +3915,161 @@ function isCodeOnlyWorkflowType(workflowType?: string): boolean {
   return workflowType === "turbopack-bundle-analyzer" || isDeepsecSecurityScanWorkflow(workflowType)
 }
 
+type DeepSecGeneratedReport = {
+  markdown: string
+  path: string
+}
+
+function getSandboxProjectRoot(projectDir?: string): string {
+  const normalizedProjectDir = projectDir?.replace(/^\/+|\/+$/g, "") || ""
+  return normalizedProjectDir ? `/vercel/sandbox/${normalizedProjectDir}` : "/vercel/sandbox"
+}
+
+async function readDeepSecGeneratedReportMarkdown(
+  sandbox: Sandbox,
+  projectDir?: string,
+  progressContext?: ProgressContext | null
+): Promise<DeepSecGeneratedReport | null> {
+  const projectRoot = getSandboxProjectRoot(projectDir)
+  const script = `
+const fs = require("node:fs")
+const path = require("node:path")
+
+const root = ${JSON.stringify(projectRoot)}
+
+function isReadableMarkdown(filePath) {
+  try {
+    const stat = fs.statSync(filePath)
+    return stat.isFile() && stat.size > 0
+  } catch {
+    return false
+  }
+}
+
+function readCandidate(filePath) {
+  if (!isReadableMarkdown(filePath)) return null
+  const markdown = fs.readFileSync(filePath, "utf8").trim()
+  if (!markdown) return null
+  return {
+    markdown,
+    path: path.relative(root, filePath) || filePath,
+  }
+}
+
+function walkMarkdownFiles(dir, depth = 0) {
+  if (depth > 5) return []
+  let entries
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  const files = []
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name === ".git") continue
+    const abs = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...walkMarkdownFiles(abs, depth + 1))
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md") && isReadableMarkdown(abs)) {
+      files.push(abs)
+    }
+  }
+  return files
+}
+
+const directCandidates = [
+  path.join(root, ".deepsec", "findings", "README.md"),
+  path.join(root, ".deepsec", "findings", "REPORT.md"),
+  path.join(root, ".deepsec", "findings", "SUMMARY.md"),
+  path.join(root, ".deepsec", "findings", "report.md"),
+  path.join(root, ".deepsec", "findings", "summary.md"),
+  path.join(root, ".deepsec", "report.md"),
+  path.join(root, ".deepsec", "REPORT.md"),
+]
+
+for (const candidate of directCandidates) {
+  const report = readCandidate(candidate)
+  if (report) {
+    process.stdout.write(JSON.stringify(report))
+    process.exit(0)
+  }
+}
+
+const findingsDir = path.join(root, ".deepsec", "findings")
+const markdownFiles = walkMarkdownFiles(findingsDir).sort((a, b) => a.localeCompare(b))
+const preferredNested = markdownFiles.find((filePath) => /(^|\\/)readme\\.md$/i.test(filePath))
+  || markdownFiles.find((filePath) => /(^|\\/)(report|summary|index)\\.md$/i.test(filePath))
+
+if (preferredNested) {
+  const report = readCandidate(preferredNested)
+  if (report) {
+    process.stdout.write(JSON.stringify(report))
+    process.exit(0)
+  }
+}
+
+const combined = markdownFiles
+  .map((filePath) => {
+    const markdown = fs.readFileSync(filePath, "utf8").trim()
+    if (!markdown) return ""
+    return ["<!-- Source: " + (path.relative(root, filePath) || filePath) + " -->", "", markdown].join("\\n")
+  })
+  .filter(Boolean)
+  .join("\\n\\n---\\n\\n")
+
+if (combined) {
+  process.stdout.write(JSON.stringify({
+    markdown: combined,
+    path: path.relative(root, findingsDir) || findingsDir,
+  }))
+  process.exit(0)
+}
+
+process.stdout.write(JSON.stringify(null))
+`
+
+  const result = await runSandboxCommandWithOptions(
+    sandbox,
+    {
+      cmd: "node",
+      args: ["-e", script],
+      env: buildSandboxToolchainEnv()
+    },
+    { timeoutMs: 15000 }
+  )
+
+  if (result.exitCode !== 0) {
+    await appendProgressLog(
+      progressContext,
+      `[DeepSec] Failed to read generated report: ${formatClaudeOutputPreview(result.stderr || result.stdout, 360)}`
+    )
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(result.stdout.trim() || "null") as DeepSecGeneratedReport | null
+    const markdown = parsed?.markdown?.trim()
+    if (!markdown) {
+      await appendProgressLog(progressContext, "[DeepSec] No generated markdown report found")
+      return null
+    }
+
+    const report = {
+      markdown,
+      path: parsed?.path || ".deepsec"
+    }
+    await appendProgressLog(progressContext, `[DeepSec] Generated report found: ${report.path}`)
+    return report
+  } catch (error) {
+    await appendProgressLog(
+      progressContext,
+      `[DeepSec] Could not parse generated report lookup: ${error instanceof Error ? error.message : String(error)}`
+    )
+    return null
+  }
+}
+
 export async function agentFixLoopStep(
   sandboxId: string,
   devUrl: string,
@@ -4419,9 +4574,13 @@ export async function agentFixLoopStep(
   const totalCacheReadTokens = agentResult.usage.cacheReadTokens
   const totalCacheCreationTokens = agentResult.usage.cacheCreationTokens
   const totalCostUsd = agentResult.costUsd
+  const deepsecGeneratedReport =
+    workflowType === "deepsec-security-scan"
+      ? await readDeepSecGeneratedReportMarkdown(sandbox, effectiveProjectDir, progressContext)
+      : null
   const generatedReportMarkdown =
-    workflowType === "deepsec-security-scan" && agentResult.summary.trim().length > 0
-      ? agentResult.summary.trim()
+    workflowType === "deepsec-security-scan"
+      ? deepsecGeneratedReport?.markdown || agentResult.summary.trim() || undefined
       : undefined
 
   // ── Success Eval ──────────────────────────────────────────────────────
