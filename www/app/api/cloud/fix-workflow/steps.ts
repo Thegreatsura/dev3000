@@ -40,7 +40,7 @@ const ASH_RUNTIME_PORT = D3K_ASH_RUNTIME_PORT
 const ASH_RUNTIME_USERNAME = "dev3000"
 const ASH_RUNTIME_ROOT = "/home/vercel-sandbox/.dev3000/ash-apps"
 const ASH_RUNTIME_LOG_DIR = "/home/vercel-sandbox/.d3k/logs"
-const ASH_TASK_ROUTE_PATH = "/.well-known/ash/v1/task"
+const ASH_MESSAGE_ROUTE_PATH = "/.well-known/ash/v1/message"
 const ASH_STREAM_INITIAL_IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const ASH_STREAM_ACTIVE_IDLE_TIMEOUT_MS = 15 * 60 * 1000
 const ASH_STREAM_RECONNECT_POLL_MS = 30 * 1000
@@ -5145,8 +5145,20 @@ async function waitForAshRuntimeReady(
         headers: { authorization, "cache-control": "no-store" }
       })
       if (response.ok) {
-        await appendProgressLog(progressContext, "[Agent] Analysis runner ready")
-        return baseUrl
+        const bodyText = await response.text()
+        try {
+          const body = JSON.parse(bodyText) as { ok?: boolean; status?: string }
+          if (body.ok === true && body.status === "ready") {
+            await appendProgressLog(progressContext, "[Agent] Analysis runner ready")
+            return baseUrl
+          }
+          lastRouteError = `health returned ${response.status}: ${bodyText.slice(0, 240) || "<empty>"}`
+        } catch {
+          lastRouteError = `health returned ${response.status} with invalid JSON: ${bodyText.slice(0, 240) || "<empty>"}`
+        }
+      } else {
+        const bodyText = await response.text().catch(() => "")
+        lastRouteError = `health returned ${response.status}: ${bodyText.slice(0, 240) || "<empty>"}`
       }
     } catch (error) {
       lastRouteError = error instanceof Error ? error.message : String(error)
@@ -5222,8 +5234,8 @@ async function ensurePackagedAshRuntimeInSandbox(
         `cd ${shellEscape(appRoot)}`,
         `if [ -f scripts/patch-workflow-world-local.mjs ]; then "$NODE_RUNTIME" scripts/patch-workflow-world-local.mjs >> ${logPath} 2>&1 || { echo "ASH workflow schema patch failed" >> ${logPath}; exit 1; }; fi`,
         `printf 'runtime=%s\\npwd=%s\\nport=%s\\nworkflow_world=%s\\nworkflow_base_url=%s\\nworkflow_data_dir=%s\\nvercel=%s\\n' "$NODE_RUNTIME" "$(pwd)" "${ASH_RUNTIME_PORT}" "$WORKFLOW_TARGET_WORLD" "$WORKFLOW_LOCAL_BASE_URL" "$WORKFLOW_LOCAL_DATA_DIR" "$VERCEL" >> ${logPath}`,
-        `ls -l ./.output/server/index.mjs >> ${logPath} 2>&1 || true`,
-        `exec "$NODE_RUNTIME" ./.output/server/index.mjs >> ${logPath} 2>&1`
+        `ls -l ./node_modules/.bin/ash ./.output/server/index.mjs >> ${logPath} 2>&1 || true`,
+        `exec ./node_modules/.bin/ash dev --no-repl --host 0.0.0.0 --port ${ASH_RUNTIME_PORT} >> ${logPath} 2>&1`
       ]
         .filter(Boolean)
         .join("\n")
@@ -5766,7 +5778,7 @@ async function streamAshRuntimeTask(
     totalTokens: number
   }
 }> {
-  const taskResponse = await fetch(`${baseUrl}${ASH_TASK_ROUTE_PATH}`, {
+  const taskResponse = await fetch(`${baseUrl}${ASH_MESSAGE_ROUTE_PATH}`, {
     method: "POST",
     headers: {
       authorization,
@@ -5777,7 +5789,7 @@ async function streamAshRuntimeTask(
 
   const taskPayloadText = await taskResponse.text()
   if (!taskResponse.ok) {
-    throw new Error(`ASH runtime rejected task start (${taskResponse.status}): ${taskPayloadText}`)
+    throw new Error(`ASH runtime rejected message start (${taskResponse.status}): ${taskPayloadText}`)
   }
 
   let taskPayload: {
@@ -5792,7 +5804,7 @@ async function streamAshRuntimeTask(
     const responsePreview = taskPayloadText.trim() || "(empty response)"
     throw new Error(
       [
-        `ASH runtime task route returned invalid JSON (${taskResponse.status}): ${responsePreview}`,
+        `ASH runtime message route returned invalid JSON (${taskResponse.status}): ${responsePreview}`,
         diagnosticText ? `Diagnostics:\n${diagnosticText}` : ""
       ]
         .filter(Boolean)
@@ -5801,7 +5813,7 @@ async function streamAshRuntimeTask(
   }
   const sessionId = taskPayload.sessionId
   if (!sessionId) {
-    throw new Error("ASH runtime task route did not return a session id.")
+    throw new Error("ASH runtime message route did not return a session id.")
   }
   await appendProgressLog(progressContext, "[Agent] Analysis session started")
   const streamResult = await readAshRuntimeSessionStream(
