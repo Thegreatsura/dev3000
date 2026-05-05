@@ -183,6 +183,17 @@ function createSelfHostedWorkflowStartOptions({
   }
 }
 
+function runnerSetupRequiredResponse(error: string) {
+  return Response.json(
+    {
+      success: false,
+      code: "runner_setup_required",
+      error
+    },
+    { status: 409, headers: corsHeaders }
+  )
+}
+
 async function refreshSelfHostedProjectOidcToken({
   isSelfHostedWorker,
   projectRefreshToken
@@ -685,42 +696,26 @@ export async function POST(request: Request) {
         const configuredWorkerBaseUrl = teamSettings.workerBaseUrl?.trim()
 
         if (!teamSettings.workerProjectId || !configuredWorkerBaseUrl) {
-          return Response.json(
-            {
-              success: false,
-              error: `Self-hosted skill-runner mode is enabled for ${team.name}, but no runner project is configured yet in /admin.`
-            },
-            { status: 409, headers: corsHeaders }
+          return runnerSetupRequiredResponse(
+            `Self-hosted skill-runner mode is enabled for ${team.name}, but no runner project is configured yet.`
           )
         }
 
         if (teamSettings.workerStatus === "provisioning") {
-          return Response.json(
-            {
-              success: false,
-              error: `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project is still provisioning.`
-            },
-            { status: 409, headers: corsHeaders }
+          return runnerSetupRequiredResponse(
+            `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project is still provisioning.`
           )
         }
 
         if (teamSettings.workerStatus === "outdated") {
-          return Response.json(
-            {
-              success: false,
-              error: `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project is updating to the latest shell version.`
-            },
-            { status: 409, headers: corsHeaders }
+          return runnerSetupRequiredResponse(
+            `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project is updating to the latest shell version.`
           )
         }
 
         if (teamSettings.workerStatus !== "ready") {
-          return Response.json(
-            {
-              success: false,
-              error: `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project still needs its team-owned Blob setup repaired.`
-            },
-            { status: 409, headers: corsHeaders }
+          return runnerSetupRequiredResponse(
+            `Self-hosted skill-runner mode is enabled for ${team.name}, but the runner project still needs its team-owned Blob setup repaired.`
           )
         }
 

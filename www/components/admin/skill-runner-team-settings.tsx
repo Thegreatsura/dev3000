@@ -16,7 +16,6 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   SKILL_RUNNER_WORKER_PROJECT_NAME,
-  type SkillRunnerExecutionMode,
   type SkillRunnerTeamSettings,
   type SkillRunnerWorkerStatus
 } from "@/lib/skill-runner-config"
@@ -192,7 +191,7 @@ export function SkillRunnerTeamSettingsPanel({ items }: SkillRunnerTeamSettingsP
 
   function cancelValidation() {
     if (validationTeamId) {
-      updateTeam(validationTeamId, { executionMode: "hosted" })
+      updateTeam(validationTeamId, { executionMode: "self-hosted" })
     }
     setIsValidationOpen(false)
   }
@@ -204,8 +203,8 @@ export function SkillRunnerTeamSettingsPanel({ items }: SkillRunnerTeamSettingsP
   return (
     <div className="space-y-5">
       <div className="rounded-lg border border-[#1f1f1f] bg-[#111] px-4 py-3 text-[13px] leading-[20px] text-[#888]">
-        Hosted mode runs skill runners on `dev3000-www`. Self-hosted mode provisions or validates a team-owned
-        `d3k-skill-runner` project, auto-configures the team, and prepares the worker handoff path.
+        Skill runners require a team-owned `d3k-skill-runner` project. Setup provisions or validates that project,
+        auto-configures the team, and prepares the worker handoff path.
       </div>
 
       {error ? (
@@ -217,7 +216,7 @@ export function SkillRunnerTeamSettingsPanel({ items }: SkillRunnerTeamSettingsP
       <div className="space-y-4">
         {items.map(({ team }) => {
           const settings = state[team.id]
-          const executionMode = settings?.executionMode || "hosted"
+          const executionMode = settings?.executionMode || "self-hosted"
 
           return (
             <div key={team.id} className="rounded-lg border border-[#1f1f1f] bg-[#111] p-5">
@@ -230,36 +229,16 @@ export function SkillRunnerTeamSettingsPanel({ items }: SkillRunnerTeamSettingsP
                   </div>
                 </div>
                 <div className="rounded-full border border-[#333] bg-[#1a1a1a] px-2.5 py-1 text-[11px] text-[#888]">
-                  {executionMode === "hosted" ? "Hosted" : "Self-hosted"}
+                  Self-hosted
                 </div>
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label className="text-[13px] text-[#888]">Execution Mode</Label>
-                  <Select
-                    value={executionMode}
-                    onValueChange={(value) => {
-                      if (value === "self-hosted" && executionMode !== "self-hosted") {
-                        openSelfHostedValidation(team.id)
-                        return
-                      }
-                      const nextSettings: SkillRunnerTeamSettings = {
-                        ...settings,
-                        executionMode: value as SkillRunnerExecutionMode
-                      }
-                      updateTeam(team.id, nextSettings)
-                      void persistTeamSettings(team.id, nextSettings)
-                    }}
-                  >
-                    <SelectTrigger className="h-9 border-[#1f1f1f] bg-transparent text-[13px] text-[#ededed]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="border-[#333] bg-[#0a0a0a]">
-                      <SelectItem value="hosted">Hosted</SelectItem>
-                      <SelectItem value="self-hosted">Self-hosted</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="flex h-9 items-center rounded-md border border-[#1f1f1f] bg-transparent px-3 text-[13px] text-[#ededed]">
+                    Self-hosted
+                  </div>
                 </div>
 
                 <div className="space-y-1.5">

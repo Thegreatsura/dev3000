@@ -367,14 +367,8 @@ function stableImportedRunnerId(teamId: string, canonicalPath: string): string {
   return `sr_imp_${createHash("sha256").update(`${teamId}:${canonicalPath}`).digest("hex").slice(0, 12)}`
 }
 
-const HOSTED_TEAM_SLUGS = new Set(["vercel", "vercel-labs"])
-
-function canUseHostedExecutionMode(team: { slug: string }): boolean {
-  return HOSTED_TEAM_SLUGS.has(team.slug)
-}
-
-export function getDefaultExecutionMode(team: { slug: string }): "hosted" | "self-hosted" {
-  return canUseHostedExecutionMode(team) ? "hosted" : "self-hosted"
+export function getDefaultExecutionMode(_team: { slug: string }): "self-hosted" {
+  return "self-hosted"
 }
 
 function buildEmptyTeamState(team: DevAgentTeam): SkillRunnerTeamState {
@@ -413,14 +407,7 @@ function normalizeTeamState(raw: SkillRunnerTeamState | null, team: DevAgentTeam
   const fallback = buildEmptyTeamState(team)
   if (!raw) return fallback
 
-  const storedExecutionMode =
-    raw.settings?.executionMode === "self-hosted"
-      ? "self-hosted"
-      : raw.settings?.executionMode === "hosted"
-        ? "hosted"
-        : getDefaultExecutionMode(team)
-  const executionMode =
-    storedExecutionMode === "hosted" && !canUseHostedExecutionMode(team) ? "self-hosted" : storedExecutionMode
+  const executionMode = "self-hosted"
   const workerBaseUrl = normalizeWorkerBaseUrl(raw.settings?.workerBaseUrl)
   const workerProjectId = raw.settings?.workerProjectId?.trim() || undefined
   const workerStatus =
@@ -484,12 +471,7 @@ export async function updateSkillRunnerTeamSettings(
 ): Promise<SkillRunnerTeamSettings> {
   const state = await getTeamSkillRunnerState(team)
 
-  const requestedExecutionMode =
-    input.executionMode === "self-hosted" || input.executionMode === "hosted"
-      ? input.executionMode
-      : state.settings.executionMode
-  const executionMode =
-    requestedExecutionMode === "hosted" && !canUseHostedExecutionMode(team) ? "self-hosted" : requestedExecutionMode
+  const executionMode = "self-hosted"
   const workerBaseUrl =
     input.workerBaseUrl !== undefined ? normalizeWorkerBaseUrl(input.workerBaseUrl) : state.settings.workerBaseUrl
   const workerProjectId =

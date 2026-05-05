@@ -225,7 +225,7 @@ export default function DevAgentRunClient({
   marketplaceStats,
   runStats,
   runnerKind = "dev-agent",
-  skillRunnerExecutionMode = "hosted",
+  skillRunnerExecutionMode = "self-hosted",
   skillRunnerWorkerBaseUrl,
   skillRunnerWorkerStatus
 }: DevAgentRunClientProps) {
@@ -839,13 +839,19 @@ export default function DevAgentRunClient({
 
     const result = (await response.json()) as {
       success?: boolean
+      code?: string
       error?: string
       runId?: string
     }
 
     if (!response.ok || !result.success || !result.runId) {
       setIsRunning(false)
-      if (isSelfHostedSkillRunner && result.error) {
+      if (
+        runnerKind === "skill-runner" &&
+        result.error &&
+        (isSelfHostedSkillRunner || result.code === "runner_setup_required")
+      ) {
+        setLocalSkillRunnerExecutionMode("self-hosted")
         setLocalSkillRunnerWorkerStatus("error")
         setWorkerSetupError({
           message: normalizeSelfHostedStartError(result.error)
