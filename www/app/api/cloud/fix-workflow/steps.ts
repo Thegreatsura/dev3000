@@ -5780,10 +5780,24 @@ async function streamAshRuntimeTask(
     throw new Error(`ASH runtime rejected task start (${taskResponse.status}): ${taskPayloadText}`)
   }
 
-  const taskPayload = JSON.parse(taskPayloadText) as {
+  let taskPayload: {
     ok?: boolean
     sessionId?: string
     streamPath?: string
+  }
+  try {
+    taskPayload = JSON.parse(taskPayloadText) as typeof taskPayload
+  } catch {
+    const diagnosticText = diagnostics ? await diagnostics("task-start").catch(() => "") : ""
+    const responsePreview = taskPayloadText.trim() || "(empty response)"
+    throw new Error(
+      [
+        `ASH runtime task route returned invalid JSON (${taskResponse.status}): ${responsePreview}`,
+        diagnosticText ? `Diagnostics:\n${diagnosticText}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    )
   }
   const sessionId = taskPayload.sessionId
   if (!sessionId) {

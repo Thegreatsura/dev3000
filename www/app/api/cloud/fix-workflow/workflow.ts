@@ -167,6 +167,8 @@ export async function cloudFixWorkflow(params: {
   projectDir?: string
   projectId?: string
   teamId?: string
+  sandboxProjectId?: string
+  sandboxTeamId?: string
   projectName: string
   vercelOidcToken?: string
   vercelAuthSource?: string
@@ -240,6 +242,8 @@ export async function cloudFixWorkflow(params: {
     projectDir,
     projectId,
     teamId,
+    sandboxProjectId: providedSandboxProjectId,
+    sandboxTeamId: providedSandboxTeamId,
     vercelOidcToken,
     vercelAuthSource,
     gatewayAuthToken,
@@ -319,12 +323,15 @@ export async function cloudFixWorkflow(params: {
   const isDeepsecSecurityScan = workflowType === "deepsec-security-scan"
   const skipsBrowserObservation = isTurbopackBundleAnalyzer || isDeepsecSecurityScan
   const isSelfHostedWorker = isSelfHostedSkillRunnerRuntime()
-  const sandboxProjectId =
-    isSelfHostedWorker && process.env.VERCEL_PROJECT_ID ? process.env.VERCEL_PROJECT_ID : projectId
-  const sandboxTeamId =
-    isSelfHostedWorker && (process.env.VERCEL_ORG_ID || process.env.VERCEL_TEAM_ID)
-      ? process.env.VERCEL_ORG_ID || process.env.VERCEL_TEAM_ID
-      : teamId
+  const sandboxProjectId = isSelfHostedWorker
+    ? providedSandboxProjectId || process.env.VERCEL_PROJECT_ID || projectId
+    : projectId
+  const sandboxTeamId = isSelfHostedWorker
+    ? providedSandboxTeamId || process.env.VERCEL_ORG_ID || process.env.VERCEL_TEAM_ID || teamId
+    : teamId
+  workflowLog(
+    `[Workflow] Sandbox binding: project=${sandboxProjectId || "(missing)"}, team=${sandboxTeamId || "(missing)"}, selfHosted=${isSelfHostedWorker ? "yes" : "no"}`
+  )
 
   // Progress context for step updates
   const progressContext =

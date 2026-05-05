@@ -57,6 +57,8 @@ type StartFixRequestBody = {
   projectDir?: string
   projectEnv?: Record<string, unknown>
   projectId?: string
+  sandboxProjectId?: string
+  sandboxTeamId?: string
   publicUrl?: string
   projectName?: string
   repoBranch?: string
@@ -468,6 +470,8 @@ export async function POST(request: Request) {
   let skillRunnerCanonicalPath: string | undefined
   let skillRunnerValidationWarning: string | undefined
   let selfHostedWorkerBaseUrl: string | undefined
+  let selfHostedWorkerProjectId: string | undefined
+  let selfHostedWorkerTeamId: string | undefined
   let workflowMirrorTarget: WorkflowRunMirrorTarget | null = null
   let skillRunnerTelemetryContext: {
     team: TeamIdentity
@@ -499,11 +503,24 @@ export async function POST(request: Request) {
     clearWorkflowLog()
 
     const body = (await request.json()) as StartFixRequestBody
+    const isForwardedSkillRunnerWorkerRequest = request.headers.get("x-dev3000-skill-runner-worker-forwarded") === "1"
     const forwardedAccessToken =
-      request.headers.get("x-dev3000-skill-runner-worker-forwarded") === "1" &&
+      isForwardedSkillRunnerWorkerRequest &&
       typeof body.forwardedAccessToken === "string" &&
       body.forwardedAccessToken.trim().length > 0
         ? body.forwardedAccessToken.trim()
+        : undefined
+    const forwardedSandboxProjectId =
+      isForwardedSkillRunnerWorkerRequest &&
+      typeof body.sandboxProjectId === "string" &&
+      body.sandboxProjectId.trim().length > 0
+        ? body.sandboxProjectId.trim()
+        : undefined
+    const forwardedSandboxTeamId =
+      isForwardedSkillRunnerWorkerRequest &&
+      typeof body.sandboxTeamId === "string" &&
+      body.sandboxTeamId.trim().length > 0
+        ? body.sandboxTeamId.trim()
         : undefined
 
     const isSelfHostedWorker = isSelfHostedSkillRunnerRuntime()
@@ -658,7 +675,7 @@ export async function POST(request: Request) {
       }
 
       const forwardedSkillRunner =
-        isSelfHostedWorker && request.headers.get("x-dev3000-skill-runner-worker-forwarded") === "1"
+        isSelfHostedWorker && isForwardedSkillRunnerWorkerRequest
           ? parseForwardedSkillRunner(body.resolvedSkillRunner, requestedSkillRunnerId)
           : null
 
@@ -720,6 +737,8 @@ export async function POST(request: Request) {
         }
 
         selfHostedWorkerBaseUrl = configuredWorkerBaseUrl
+        selfHostedWorkerProjectId = teamSettings.workerProjectId
+        selfHostedWorkerTeamId = team.id
       }
     } else if (typeof body.devAgentId === "string" && body.devAgentId.trim().length > 0) {
       devAgent = await getDevAgent(body.devAgentId.trim())
@@ -904,6 +923,8 @@ export async function POST(request: Request) {
           : projectDir,
       projectId: analysisTargetType === "url" ? undefined : projectId,
       teamId: analysisTargetType === "url" ? undefined : teamId,
+      sandboxProjectId: forwardedSandboxProjectId,
+      sandboxTeamId: forwardedSandboxTeamId,
       projectName,
       vercelOidcToken: vercelApiToken,
       vercelAuthSource: vercelApiTokenSource,
@@ -954,20 +975,17 @@ export async function POST(request: Request) {
       // For before/after screenshots in PR
       productionUrl,
       useV0DevAgentRunner,
-      controlPlaneBaseUrl:
-        request.headers.get("x-dev3000-skill-runner-worker-forwarded") === "1"
-          ? typeof body.controlPlaneBaseUrl === "string"
-            ? body.controlPlaneBaseUrl
-            : undefined
-          : undefined,
-      controlPlaneAccessToken:
-        request.headers.get("x-dev3000-skill-runner-worker-forwarded") === "1" ? accessToken : undefined,
-      controlPlaneMirrorSecret:
-        request.headers.get("x-dev3000-skill-runner-worker-forwarded") === "1"
-          ? typeof body.controlPlaneMirrorSecret === "string"
-            ? body.controlPlaneMirrorSecret
-            : undefined
-          : undefined,
+      controlPlaneBaseUrl: isForwardedSkillRunnerWorkerRequest
+        ? typeof body.controlPlaneBaseUrl === "string"
+          ? body.controlPlaneBaseUrl
+          : undefined
+        : undefined,
+      controlPlaneAccessToken: isForwardedSkillRunnerWorkerRequest ? accessToken : undefined,
+      controlPlaneMirrorSecret: isForwardedSkillRunnerWorkerRequest
+        ? typeof body.controlPlaneMirrorSecret === "string"
+          ? body.controlPlaneMirrorSecret
+          : undefined
+        : undefined,
       skillRunnerTelemetryUserName: currentUserForTelemetry?.name || currentUserForTelemetry?.username || undefined,
       skillRunnerTelemetryUserHandle: currentUserForTelemetry?.username || undefined,
       skillRunnerTelemetryTeamId: skillRunnerTelemetryContext?.team.id,
@@ -1070,6 +1088,8 @@ export async function POST(request: Request) {
               runId,
               timestamp: runTimestamp,
               workflowType,
+              sandboxProjectId: selfHostedWorkerProjectId,
+              sandboxTeamId: selfHostedWorkerTeamId,
               controlPlaneBaseUrl: new URL(request.url).origin,
               controlPlaneMirrorSecret: workflowMirrorSecret,
               resolvedSkillRunner:
