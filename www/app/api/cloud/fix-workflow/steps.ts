@@ -50,6 +50,8 @@ const ASH_DIAGNOSTIC_HTTP_TIMEOUT_MS = 8000
 const ASH_DIAGNOSTIC_SANDBOX_TIMEOUT_MS = 15000
 const AI_GATEWAY_OIDC_EXPIRATION_BUFFER_MS = 10 * 60 * 1000
 const AI_GATEWAY_OIDC_MIN_USABLE_MS = 60 * 1000
+const DEEPSEC_PROCESS_TIMEOUT_MS = 25 * 60 * 1000
+const DEEPSEC_COMMAND_TIMEOUT_MS = 5 * 60 * 1000
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
 const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const ANALYZE_TO_NDJSON_SCRIPT = `#!/usr/bin/env node
@@ -4089,6 +4091,313 @@ function isSuccessfulDeepSecGeneratedReport(markdown: string | undefined): boole
   ].some((failureSignal) => normalized.includes(failureSignal))
 }
 
+type DeepSecCommandTranscriptEntry = {
+  command: string
+  durationMs: number
+  exitCode: number
+  label: string
+  stderr: string
+  stdout: string
+}
+
+function buildDeepSecEnv(gatewayAuthToken: string, gatewayAuthSource: string): Record<string, string> {
+  return {
+    ...buildSandboxToolchainEnv(),
+    ...buildClaudeAiGatewayEnv(gatewayAuthToken, gatewayAuthSource),
+    AI_GATEWAY_API_KEY: gatewayAuthToken,
+    OPENAI_API_KEY: gatewayAuthToken,
+    OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
+    CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1"
+  }
+}
+
+function buildDeepSecInfoWriterScript(projectRoot: string): string {
+  return [
+    "const fs = require('node:fs')",
+    "const path = require('node:path')",
+    `const root = ${JSON.stringify(projectRoot)}`,
+    "const deepsecRoot = path.join(root, '.deepsec')",
+    "function read(file, max = 1800) { try { const value = fs.readFileSync(path.join(root, file), 'utf8').trim(); return value.length > max ? value.slice(0, max) + '\\n...' : value } catch { return '' } }",
+    "function exists(file) { try { return fs.statSync(path.join(root, file)).isFile() } catch { return false } }",
+    "function walk(dir, depth = 0, out = []) {",
+    "  if (depth > 3 || out.length >= 18) return out",
+    "  let entries = []",
+    "  try { entries = fs.readdirSync(path.join(root, dir), { withFileTypes: true }) } catch { return out }",
+    "  for (const entry of entries) {",
+    "    if (out.length >= 18) break",
+    "    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.next' || entry.name === '.deepsec') continue",
+    "    const rel = path.join(dir, entry.name)",
+    "    if (entry.isDirectory()) walk(rel, depth + 1, out)",
+    "    else if (/\\.(ts|tsx|js|jsx|mjs|cjs|go|py|rb|php|rs)$/.test(entry.name)) out.push(rel)",
+    "  }",
+    "  return out",
+    "}",
+    "function pickRepresentativeFiles() {",
+    "  const explicit = ['middleware.ts', 'middleware.js', 'proxy.ts', 'proxy.js', 'auth.ts', 'auth.js', 'lib/auth.ts', 'lib/auth.js']",
+    "  const candidates = [...explicit.filter(exists), ...walk('app'), ...walk('pages'), ...walk('src'), ...walk('lib'), ...walk('server'), ...walk('api')]",
+    "  const seen = new Set()",
+    "  return candidates.filter((file) => { if (seen.has(file)) return false; seen.add(file); return true }).slice(0, 12)",
+    "}",
+    "function parsePackageSummary() {",
+    "  try {",
+    "    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))",
+    "    const deps = Object.keys({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) })",
+    "    const interesting = deps.filter((dep) => /next|react|auth|clerk|supabase|prisma|drizzle|stripe|resend|vercel|kv|blob|redis|postgres|firebase|next-auth/i.test(dep)).slice(0, 14)",
+    "    return { name: pkg.name || path.basename(root), scripts: Object.keys(pkg.scripts || {}).slice(0, 8), deps: interesting }",
+    "  } catch {",
+    "    return { name: path.basename(root), scripts: [], deps: [] }",
+    "  }",
+    "}",
+    "const dataDir = path.join(deepsecRoot, 'data')",
+    "const projectDirs = fs.readdirSync(dataDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path.join(dataDir, entry.name))",
+    "if (projectDirs.length === 0) throw new Error('No DeepSec project data directory found')",
+    "const pkg = parsePackageSummary()",
+    "const representativeFiles = pickRepresentativeFiles()",
+    "const readme = read('README.md')",
+    "const agentInstructions = read('AGENTS.md') || read('CLAUDE.md')",
+    "const fileBullets = representativeFiles.slice(0, 8).map((file) => '- ' + file).join('\\n') || '- No representative source files detected by the bootstrapper.'",
+    "const authCandidates = representativeFiles.filter((file) => /auth|middleware|proxy|session|login|user|team|admin|api|route/i.test(file)).slice(0, 5)",
+    "const authBullets = authCandidates.map((file) => '- Review ' + file + ' for authentication, authorization, request validation, and privileged side effects.').join('\\n') || '- No obvious auth helpers were detected; treat request handlers and server actions as security boundaries.'",
+    "const patternBullets = representativeFiles.slice(0, 5).map((file) => '- Check ' + file + ' for project-specific trust boundaries, user-controlled input, external API calls, and secret handling.').join('\\n') || '- Check request entry points for user-controlled input, external API calls, and secret handling.'",
+    "const falsePositiveBullets = ['- Generated build output, dependency directories, and local DeepSec state are out of scope.', '- Public static assets and intentionally public read endpoints should not be treated as auth bypasses without a privileged effect.'].join('\\n')",
+    "const contextLines = [",
+    "  '# ' + pkg.name",
+    "  , ''",
+    "  , '## What this codebase does'",
+    "  , readme ? readme.split(/\\n+/).slice(0, 5).join(' ').slice(0, 700) : 'A Vercel project using ' + (pkg.deps.join(', ') || 'the detected package manifest') + '.'",
+    "  , pkg.deps.length ? 'Notable packages: ' + pkg.deps.join(', ') + '.' : ''",
+    "  , pkg.scripts.length ? 'Project scripts: ' + pkg.scripts.join(', ') + '.' : ''",
+    "  , ''",
+    "  , '## Auth shape'",
+    "  , authBullets",
+    "  , ''",
+    "  , '## Threat model'",
+    "  , 'Attackers may target request handlers, server actions, storage integrations, third-party API calls, auth/session boundaries, and any privileged project operations exposed through user input.'",
+    "  , agentInstructions ? 'Repository instructions present: ' + agentInstructions.split(/\\n+/).slice(0, 4).join(' ').slice(0, 500) : ''",
+    "  , ''",
+    "  , '## Project-specific patterns to flag'",
+    "  , patternBullets",
+    "  , ''",
+    "  , '## Representative files inspected'",
+    "  , fileBullets",
+    "  , ''",
+    "  , '## Known false-positives'",
+    "  , falsePositiveBullets",
+    "].filter(Boolean)",
+    "for (const projectDir of projectDirs) {",
+    "  fs.writeFileSync(path.join(projectDir, 'INFO.md'), contextLines.join('\\n') + '\\n')",
+    "}",
+    "process.stdout.write('Wrote INFO.md for ' + projectDirs.length + ' DeepSec project(s)\\n')"
+  ].join("\n")
+}
+
+function buildDeepSecNativeBinaryScript(): string {
+  return [
+    "set -e",
+    'SDK_VER=""',
+    "for CANDIDATE in \\",
+    "  ./node_modules/@anthropic-ai/claude-agent-sdk \\",
+    "  ./node_modules/.pnpm/@anthropic-ai+claude-agent-sdk@*/node_modules/@anthropic-ai/claude-agent-sdk; do",
+    "  for DIR in $CANDIDATE; do",
+    '    if [ -f "$DIR/package.json" ]; then',
+    "      SDK_VER=$(node -p \"require('$DIR/package.json').version\" 2>/dev/null)",
+    "      break 2",
+    "    fi",
+    "  done",
+    "done",
+    'if [ -z "$SDK_VER" ]; then',
+    '  echo "No Claude Agent SDK dependency detected; skipping native binary install."',
+    "  exit 0",
+    "fi",
+    'case "$(uname -m)" in',
+    "  x86_64|amd64) ARCH=x64 ;;",
+    "  aarch64|arm64) ARCH=arm64 ;;",
+    '  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;',
+    "esac",
+    "LIBC=gnu",
+    "if ldd /bin/ls 2>&1 | grep -qi musl; then LIBC=musl; fi",
+    'SRC_SUFFIX=""',
+    '[ "$LIBC" = "musl" ] && SRC_SUFFIX="-musl"',
+    'SRC_VARIANT="linux-$ARCH$SRC_SUFFIX"',
+    'SRC_PKG="@anthropic-ai/claude-agent-sdk-$SRC_VARIANT"',
+    'echo "Detected Claude Agent SDK $SDK_VER for $ARCH/$LIBC"',
+    "rm -rf /tmp/claude-native-fetch && mkdir -p /tmp/claude-native-fetch",
+    "cd /tmp/claude-native-fetch",
+    'npm pack "$SRC_PKG@$SDK_VER" --silent 2>&1 | tail -1',
+    "tar -xzf ./*.tgz",
+    "test -f package/claude",
+    'for DEST_VARIANT in "linux-$ARCH-musl" "linux-$ARCH"; do',
+    '  PNPM_KEY="@anthropic-ai+claude-agent-sdk-$DEST_VARIANT@$SDK_VER"',
+    '  DEST_PKG="@anthropic-ai/claude-agent-sdk-$DEST_VARIANT"',
+    '  TARGET_DIR="$OLDPWD/node_modules/.pnpm/$PNPM_KEY/node_modules/$DEST_PKG"',
+    '  mkdir -p "$TARGET_DIR"',
+    '  cp package/claude "$TARGET_DIR/claude"',
+    '  chmod +x "$TARGET_DIR/claude"',
+    '  echo "Installed $DEST_VARIANT/claude"',
+    "done",
+    "rm -rf /tmp/claude-native-fetch"
+  ].join("\n")
+}
+
+async function runDeepSecCommandInSandbox(
+  sandbox: Sandbox,
+  cwd: string,
+  label: string,
+  command: string,
+  env: Record<string, string>,
+  progressContext: ProgressContext | null | undefined,
+  timeoutMs = DEEPSEC_COMMAND_TIMEOUT_MS
+): Promise<DeepSecCommandTranscriptEntry> {
+  await appendProgressLog(progressContext, `[DeepSec] ${label}...`)
+  const startedAt = Date.now()
+  const heartbeat = setInterval(() => {
+    const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000)
+    void appendProgressLog(progressContext, `[DeepSec] ${label} still running (${elapsedSeconds}s elapsed)`)
+  }, 30000)
+
+  let result: Awaited<ReturnType<typeof runSandboxCommandWithOptions>>
+  try {
+    result = await runSandboxCommandWithOptions(
+      sandbox,
+      {
+        cmd: "sh",
+        args: ["-lc", command],
+        cwd,
+        env
+      },
+      { timeoutMs }
+    )
+  } finally {
+    clearInterval(heartbeat)
+  }
+
+  const durationMs = Date.now() - startedAt
+  const entry = {
+    command,
+    durationMs,
+    exitCode: result.exitCode,
+    label,
+    stderr: result.stderr.trim(),
+    stdout: result.stdout.trim()
+  }
+  if (result.exitCode !== 0) {
+    await appendProgressLog(
+      progressContext,
+      `[DeepSec] ${label} failed exit=${result.exitCode}: ${formatClaudeOutputPreview(result.stderr || result.stdout, 500)}`
+    )
+    throw new Error(`DeepSec ${label} failed: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`)
+  }
+
+  await appendProgressLog(
+    progressContext,
+    `[DeepSec] ${label} completed (${Math.round(durationMs / 1000)}s)${
+      result.stdout.trim() ? `: ${formatClaudeOutputPreview(result.stdout, 220)}` : ""
+    }`
+  )
+  return entry
+}
+
+function formatDeepSecTranscript(entries: DeepSecCommandTranscriptEntry[]): string {
+  return entries
+    .map((entry) =>
+      [
+        `## ${entry.label}`,
+        "",
+        "```bash",
+        entry.command,
+        "```",
+        "",
+        `Exit code: ${entry.exitCode}`,
+        `Duration: ${Math.round(entry.durationMs / 1000)}s`,
+        entry.stdout ? ["", "### stdout", "```", entry.stdout.slice(0, 12000), "```"].join("\n") : "",
+        entry.stderr ? ["", "### stderr", "```", entry.stderr.slice(0, 12000), "```"].join("\n") : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    )
+    .join("\n\n")
+}
+
+async function runDeepSecCliScanInSandbox({
+  gatewayAuthSource,
+  gatewayAuthToken,
+  progressContext,
+  projectDir,
+  sandbox
+}: {
+  gatewayAuthSource?: string
+  gatewayAuthToken?: string
+  progressContext?: ProgressContext | null
+  projectDir?: string
+  sandbox: Sandbox
+}): Promise<{
+  transcript: string
+  summary: string
+  systemPrompt: string
+  modelId: string
+  skillsLoaded: string[]
+  usage: {
+    promptTokens: number
+    completionTokens: number
+    cacheReadTokens: number
+    cacheCreationTokens: number
+    totalTokens: number
+  }
+  costUsd: number
+}> {
+  const token = requireAiGatewayAuthToken(gatewayAuthToken)
+  const authSource = gatewayAuthSource || getAiGatewayAuthSource(gatewayAuthToken)
+  const projectRoot = getSandboxProjectRoot(projectDir)
+  const env = buildDeepSecEnv(token, authSource)
+  const transcriptEntries: DeepSecCommandTranscriptEntry[] = []
+
+  const run = async (label: string, command: string, timeoutMs?: number) => {
+    transcriptEntries.push(
+      await runDeepSecCommandInSandbox(sandbox, projectRoot, label, command, env, progressContext, timeoutMs)
+    )
+  }
+
+  await appendProgressLog(progressContext, "[DeepSec] Running deterministic DeepSec CLI workflow")
+  await run(
+    "Initialize workspace",
+    "if [ ! -d .deepsec ]; then npx --yes deepsec@latest init; else echo '.deepsec already exists'; fi",
+    180000
+  )
+  await run("Install DeepSec dependencies", "cd .deepsec && corepack pnpm install", 180000)
+  await run("Install Claude Agent SDK native binary", `cd .deepsec && ${buildDeepSecNativeBinaryScript()}`, 180000)
+  await run("Write project context", `node -e ${shellEscape(buildDeepSecInfoWriterScript(projectRoot))}`, 60000)
+  await run("Scan candidates", "cd .deepsec && corepack pnpm deepsec scan", 300000)
+  await run(
+    "Process candidates",
+    "cd .deepsec && corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3",
+    DEEPSEC_PROCESS_TIMEOUT_MS
+  )
+  await run(
+    "Generate markdown report",
+    "cd .deepsec && corepack pnpm deepsec export --format md-dir --out ./findings",
+    120000
+  )
+  await run("Capture status", "cd .deepsec && corepack pnpm deepsec status", 120000)
+
+  const transcript = formatDeepSecTranscript(transcriptEntries)
+  const statusOutput = transcriptEntries.at(-1)?.stdout.trim()
+  return {
+    transcript,
+    summary: statusOutput || "DeepSec scan completed and markdown report was generated.",
+    systemPrompt: "[DeepSec deterministic CLI workflow]",
+    modelId: "deepsec-cli",
+    skillsLoaded: ["deepsec"],
+    usage: {
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 0
+    },
+    costUsd: 0
+  }
+}
+
 export async function agentFixLoopStep(
   sandboxId: string,
   devUrl: string,
@@ -7216,7 +7525,7 @@ function buildWorkflowSpecificExecutionGuidance({
       "This is a code-only DeepSec workflow. Do not start a dev server or use browser/Web Vitals tooling.",
       "Run DeepSec from the target project checkout and keep the durable setup under `.deepsec/`.",
       "Use the environment-provided AI Gateway credentials. Do not write credentials into `.env.local` or tracked files.",
-      "After installing `.deepsec` dependencies with pnpm, run `timeout 90s node node_modules/@anthropic-ai/claude-code/install.cjs` from `.deepsec/` and verify `node_modules/.bin/claude --version` before processing. If `timeout` is unavailable, use an equivalent Node child_process timeout wrapper; never run `install.cjs` unbounded.",
+      "After installing `.deepsec` dependencies with pnpm, ensure the Claude Agent SDK native binary that DeepSec actually uses is available. Do not run a Claude Code postinstall; DeepSec uses `@anthropic-ai/claude-agent-sdk`.",
       "Use the default bounded processing pass unless the user explicitly requested a full scan.",
       "If DeepSec processing fails, stop and report the failure instead of generating a fallback report.",
       "Export markdown findings or create a no-findings README only after DeepSec processing succeeds."
@@ -8504,12 +8813,18 @@ async function runAgentWithDiagnoseTool(
     await appendProgressLog(progressContext, "[Agent] AI Gateway connected")
   }
 
+  if (workflowTypeForPrompt === "deepsec-security-scan") {
+    return await runDeepSecCliScanInSandbox({
+      gatewayAuthSource: effectiveGatewayAuthSource,
+      gatewayAuthToken: effectiveGatewayAuthToken,
+      progressContext,
+      projectDir,
+      sandbox
+    })
+  }
+
   if (devAgentAshTarballUrl) {
     try {
-      if (workflowTypeForPrompt === "deepsec-security-scan") {
-        await appendProgressLog(progressContext, "[Claude] Ensuring Claude Code CLI is available for DeepSec...")
-        await ensureClaudeCodeInstalledInSandbox(sandbox, progressContext)
-      }
       await appendProgressLog(progressContext, `[Agent] Starting ${devAgentName || "agent"}...`)
       return await runAshAgentInSandbox(
         sandbox,
