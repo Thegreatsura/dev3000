@@ -144,6 +144,14 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
+function getOidcSandboxBinding(token: string | undefined): { projectId?: string; teamId?: string } {
+  if (!token) return {}
+  const payload = decodeJwtPayload(token)
+  const projectId = typeof payload?.project_id === "string" ? payload.project_id.trim() || undefined : undefined
+  const teamId = typeof payload?.owner_id === "string" ? payload.owner_id.trim() || undefined : undefined
+  return { projectId, teamId }
+}
+
 function describeOidcClaimsForLog(token: string | undefined): Record<string, unknown> | null {
   if (!token) return null
   const payload = decodeJwtPayload(token)
@@ -153,6 +161,8 @@ function describeOidcClaimsForLog(token: string | undefined): Record<string, unk
     iss: payload.iss,
     aud: payload.aud,
     sub: payload.sub,
+    ownerId: payload.owner_id,
+    projectId: payload.project_id,
     owner: payload.owner,
     project: payload.project,
     environment: payload.environment,
@@ -172,7 +182,8 @@ function createSelfHostedWorkflowStartOptions({
   if (!isSelfHostedWorker) return undefined
 
   const authToken = workflowWorldToken?.trim()
-  const projectId = process.env.VERCEL_PROJECT_ID?.trim()
+  const oidcBinding = getOidcSandboxBinding(authToken)
+  const projectId = process.env.VERCEL_PROJECT_ID?.trim() || oidcBinding.projectId
   const deploymentId = process.env.VERCEL_DEPLOYMENT_ID?.trim()
 
   if (!authToken || !projectId) {
@@ -186,6 +197,7 @@ function createSelfHostedWorkflowStartOptions({
 
   console.log("[Start Fix] Self-hosted Workflow world config", {
     projectId,
+    teamId: oidcBinding.teamId || null,
     deploymentId: deploymentId || null,
     tokenClaims: describeOidcClaimsForLog(authToken)
   })
@@ -549,6 +561,7 @@ export async function POST(request: Request) {
       projectRefreshToken: selfHostedProjectOidcRefreshToken,
       runtimeOidcToken
     })
+    const workerOidcBinding = getOidcSandboxBinding(workerOidcAuth.token)
 
     // Resolve the token used by downstream Vercel project/sandbox APIs inside the workflow.
     // Hosted control-plane requests should prefer the signed-in user's token.
@@ -969,8 +982,19 @@ export async function POST(request: Request) {
           : projectDir,
       projectId: analysisTargetType === "url" ? undefined : projectId,
       teamId: analysisTargetType === "url" ? undefined : teamId,
-      sandboxProjectId: forwardedSandboxProjectId,
-      sandboxTeamId: forwardedSandboxTeamId,
+      sandboxProjectId:
+        forwardedSandboxProjectId ||
+        (isSelfHostedWorker
+          ? workerOidcBinding.projectId || process.env.VERCEL_PROJECT_ID?.trim() || undefined
+          : undefined),
+      sandboxTeamId:
+        forwardedSandboxTeamId ||
+        (isSelfHostedWorker
+          ? workerOidcBinding.teamId ||
+            process.env.VERCEL_ORG_ID?.trim() ||
+            process.env.VERCEL_TEAM_ID?.trim() ||
+            undefined
+          : undefined),
       projectName,
       vercelOidcToken: vercelApiToken,
       vercelAuthSource: vercelApiTokenSource,

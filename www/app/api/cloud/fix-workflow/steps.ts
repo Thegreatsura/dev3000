@@ -1678,43 +1678,42 @@ async function getRunningSandboxWithRetry(
 ): Promise<Sandbox> {
   let lastError: unknown
   const phaseLabel = phase === "observe" ? "Observe" : phase === "agent" ? "Agent" : "Sandbox"
-  const tokenCandidates =
-    credentials?.tokens && credentials.tokens.length > 0 ? credentials.tokens : [undefined as string | undefined]
-  const credentialVariants =
-    credentials?.projectId && credentials.teamId
-      ? [
-          { projectId: credentials.projectId, teamId: credentials.teamId, label: "project-scoped" },
-          { projectId: undefined, teamId: undefined, label: "unscoped" }
-        ]
-      : [{ projectId: credentials?.projectId, teamId: credentials?.teamId, label: "default" }]
+  const credentialAttempts = buildSandboxCredentialAttempts({
+    projectId: credentials?.projectId,
+    teamId: credentials?.teamId,
+    tokens: credentials?.tokens
+  })
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    for (const variant of credentialVariants) {
-      let sawProjectBindingFailure = false
-      for (const token of tokenCandidates) {
-        try {
-          const sandbox = await Sandbox.get({
-            sandboxId,
-            teamId: variant.teamId,
-            projectId: variant.projectId,
-            token
-          })
-          if (sandbox.status !== "running") {
-            throw new Error(`Sandbox not running: ${sandbox.status}`)
-          }
-          return sandbox
-        } catch (error) {
-          lastError = error
-          if (isSandboxProjectBindingFailure(error) && variant.label === "project-scoped") {
-            sawProjectBindingFailure = true
-          }
+    for (const credentialAttempt of credentialAttempts) {
+      try {
+        const sandbox = await Sandbox.get({
+          sandboxId,
+          ...formatSandboxCredentialAttempt(credentialAttempt)
+        })
+        if (sandbox.status !== "running") {
+          throw new Error(`Sandbox not running: ${sandbox.status}`)
+        }
+        return sandbox
+      } catch (error) {
+        lastError = error
+        if (isSandboxProjectBindingFailure(error) && credentialAttempt.label === "project-scoped") {
+          await appendProgressLog(
+            progressContext,
+            `[${phaseLabel}] Project-scoped sandbox reattach failed; retrying with runtime OIDC credentials...`
+          )
+        } else if (isVercelAuthFailure(error) && credentialAttempt.label === "project-scoped") {
+          await appendProgressLog(
+            progressContext,
+            `[${phaseLabel}] Project-scoped sandbox auth failed; retrying with runtime OIDC credentials...`
+          )
         }
       }
 
-      if (sawProjectBindingFailure && variant.label === "project-scoped") {
+      if (credentialAttempt.label === "project-scoped") {
         await appendProgressLog(
           progressContext,
-          `[${phaseLabel}] Project-scoped sandbox reattach failed across available credentials; retrying without project binding...`
+          `[${phaseLabel}] Retrying sandbox reattach with runtime credentials...`
         )
       }
     }
@@ -1763,23 +1762,68 @@ function getVercelApiTokenCandidates(explicitToken?: string): string[] {
   )
 }
 
+type SandboxCredentialAttempt = {
+  label: "project-scoped" | "runtime-oidc"
+  projectId?: string
+  teamId?: string
+  token?: string
+}
+
+function buildSandboxCredentialAttempts({
+  projectId,
+  teamId,
+  tokens
+}: {
+  projectId?: string
+  teamId?: string
+  tokens?: string[]
+}): SandboxCredentialAttempt[] {
+  const explicitTokens = Array.from(new Set((tokens || []).map((token) => token?.trim()).filter(Boolean) as string[]))
+  const attempts: SandboxCredentialAttempt[] = []
+
+  if (projectId && teamId) {
+    for (const token of explicitTokens) {
+      attempts.push({ label: "project-scoped", projectId, teamId, token })
+    }
+  }
+
+  attempts.push({ label: "runtime-oidc" })
+  return attempts
+}
+
+function formatSandboxCredentialAttempt(attempt: SandboxCredentialAttempt): {
+  projectId?: string
+  teamId?: string
+  token?: string
+} {
+  if (attempt.label !== "project-scoped") return {}
+  return {
+    projectId: attempt.projectId,
+    teamId: attempt.teamId,
+    token: attempt.token
+  }
+}
+
 function resolveEffectiveSandboxBinding({
+  fallbackToken,
   projectId,
   sandboxProjectId,
   sandboxTeamId,
   teamId
 }: {
+  fallbackToken?: string
   projectId?: string
   sandboxProjectId?: string
   sandboxTeamId?: string
   teamId?: string
 }): { projectId?: string; teamId?: string } {
+  const oidcBinding = getOidcSandboxBinding(fallbackToken)
   const runtimeProjectId = process.env.VERCEL_PROJECT_ID?.trim() || undefined
   const runtimeTeamId = (process.env.VERCEL_ORG_ID || process.env.VERCEL_TEAM_ID)?.trim() || undefined
 
   return {
-    projectId: sandboxProjectId || runtimeProjectId || projectId,
-    teamId: sandboxTeamId || runtimeTeamId || teamId
+    projectId: sandboxProjectId || oidcBinding.projectId || runtimeProjectId || projectId,
+    teamId: sandboxTeamId || oidcBinding.teamId || runtimeTeamId || teamId
   }
 }
 
@@ -1834,48 +1878,41 @@ async function createSandboxWithTokenFallback(
   phase?: "init" | "observe" | "agent"
 ): Promise<Awaited<ReturnType<typeof getOrCreateD3kSandbox>>> {
   const phaseLabel = phase === "observe" ? "Observe" : phase === "agent" ? "Agent" : "Sandbox"
-  const tokenCandidates = vercelApiTokens.length > 0 ? vercelApiTokens : [undefined as string | undefined]
-  const configVariants =
-    config.projectId && config.teamId
-      ? [
-          { projectId: config.projectId, teamId: config.teamId, label: "project-scoped" },
-          { projectId: undefined, teamId: undefined, label: "unscoped" }
-        ]
-      : [{ projectId: config.projectId, teamId: config.teamId, label: "default" }]
+  const credentialAttempts = buildSandboxCredentialAttempts({
+    projectId: config.projectId,
+    teamId: config.teamId,
+    tokens: vercelApiTokens
+  })
   let lastError: unknown
 
-  for (const variant of configVariants) {
-    let sawProjectBindingFailure = false
-    for (let index = 0; index < tokenCandidates.length; index++) {
-      const token = tokenCandidates[index]
-      try {
-        return await getOrCreateD3kSandbox({
-          ...config,
-          projectId: variant.projectId,
-          teamId: variant.teamId,
-          vercelToken: token
-        })
-      } catch (error) {
-        lastError = error
-        if (isSandboxProjectBindingFailure(error) && variant.label === "project-scoped") {
-          sawProjectBindingFailure = true
+  for (const credentialAttempt of credentialAttempts) {
+    try {
+      return await getOrCreateD3kSandbox({
+        ...config,
+        projectId: credentialAttempt.projectId,
+        teamId: credentialAttempt.teamId,
+        vercelToken: credentialAttempt.token
+      })
+    } catch (error) {
+      lastError = error
+      if (credentialAttempt.label === "project-scoped") {
+        if (isSandboxProjectBindingFailure(error)) {
+          await appendProgressLog(
+            progressContext,
+            `[${phaseLabel}] Project-scoped sandbox binding failed; retrying with runtime OIDC credentials...`
+          )
           continue
         }
-        if (!isVercelAuthFailure(error) || index === tokenCandidates.length - 1) {
-          throw error
+        if (isVercelAuthFailure(error)) {
+          await appendProgressLog(
+            progressContext,
+            `[${phaseLabel}] Sandbox auth failed with project-scoped credentials; retrying with runtime OIDC credentials...`
+          )
+          continue
         }
-        await appendProgressLog(
-          progressContext,
-          `[${phaseLabel}] Sandbox auth failed with token candidate ${index + 1}/${tokenCandidates.length}; retrying with fallback credential...`
-        )
       }
-    }
 
-    if (sawProjectBindingFailure && variant.label === "project-scoped") {
-      await appendProgressLog(
-        progressContext,
-        `[${phaseLabel}] Project-scoped sandbox binding failed across available credentials; retrying without project binding...`
-      )
+      throw error
     }
   }
 
@@ -4122,6 +4159,8 @@ export type DeepSecCommandTranscriptEntry = {
 
 export interface DeepSecPreparedState {
   sandboxId: string
+  sandboxProjectId?: string
+  sandboxTeamId?: string
   projectDir?: string
   transcriptEntries: DeepSecCommandTranscriptEntry[]
   timing: AgentStepTiming
@@ -4129,6 +4168,8 @@ export interface DeepSecPreparedState {
 
 export interface DeepSecProcessState {
   sandboxId: string
+  sandboxProjectId?: string
+  sandboxTeamId?: string
   projectDir?: string
   processStateDir: string
   transcriptEntries: DeepSecCommandTranscriptEntry[]
@@ -4483,14 +4524,24 @@ type DeepSecStepParams = {
 async function reconnectDeepSecSandbox(
   params: DeepSecStepParams,
   options: { allowRecreate: boolean }
-): Promise<{ sandbox: Sandbox; recreatedSandbox: boolean; effectiveProjectDir?: string }> {
+): Promise<{
+  sandbox: Sandbox
+  recreatedSandbox: boolean
+  effectiveProjectDir?: string
+  sandboxProjectId?: string
+  sandboxTeamId?: string
+}> {
   const vercelApiTokens = getVercelApiTokenCandidates(params.vercelOidcToken)
   const effectiveSandboxBinding = resolveEffectiveSandboxBinding({
+    fallbackToken: params.gatewayAuthToken || params.vercelOidcToken,
     projectId: params.projectId,
     sandboxProjectId: params.sandboxProjectId,
     sandboxTeamId: params.sandboxTeamId,
     teamId: params.teamId
   })
+  workflowLog(
+    `[DeepSec] Sandbox binding resolved: project=${effectiveSandboxBinding.projectId ? "present" : "missing"}, team=${effectiveSandboxBinding.teamId ? "present" : "missing"}, tokens=${vercelApiTokens.length}`
+  )
 
   try {
     const sandbox = await getRunningSandboxWithRetry(params.sandboxId, params.progressContext, "agent", 3, 2000, {
@@ -4498,7 +4549,13 @@ async function reconnectDeepSecSandbox(
       projectId: effectiveSandboxBinding.projectId,
       tokens: vercelApiTokens
     })
-    return { sandbox, recreatedSandbox: false, effectiveProjectDir: params.projectDir }
+    return {
+      sandbox,
+      recreatedSandbox: false,
+      effectiveProjectDir: params.projectDir,
+      sandboxProjectId: effectiveSandboxBinding.projectId,
+      sandboxTeamId: effectiveSandboxBinding.teamId
+    }
   } catch (error) {
     if (!options.allowRecreate) {
       throw error
@@ -4527,7 +4584,13 @@ async function reconnectDeepSecSandbox(
       "agent"
     )
     await appendProgressLog(params.progressContext, `[Agent] Fresh sandbox ready: ${freshResult.sandbox.sandboxId}`)
-    return { sandbox: freshResult.sandbox, recreatedSandbox: true, effectiveProjectDir: params.projectDir }
+    return {
+      sandbox: freshResult.sandbox,
+      recreatedSandbox: true,
+      effectiveProjectDir: params.projectDir,
+      sandboxProjectId: effectiveSandboxBinding.projectId,
+      sandboxTeamId: effectiveSandboxBinding.teamId
+    }
   }
 }
 
@@ -4536,9 +4599,10 @@ export async function deepSecPrepareStep(params: DeepSecStepParams): Promise<Dee
   await updateProgress(params.progressContext, 3, "Running DeepSec security scan...", params.devUrl)
 
   timer.start("Reconnect to sandbox")
-  const { sandbox, recreatedSandbox, effectiveProjectDir } = await reconnectDeepSecSandbox(params, {
-    allowRecreate: true
-  })
+  const { sandbox, recreatedSandbox, effectiveProjectDir, sandboxProjectId, sandboxTeamId } =
+    await reconnectDeepSecSandbox(params, {
+      allowRecreate: true
+    })
   timer.end()
 
   if (recreatedSandbox) {
@@ -4583,6 +4647,8 @@ export async function deepSecPrepareStep(params: DeepSecStepParams): Promise<Dee
   const timing = timer.getData()
   return {
     sandboxId: sandbox.sandboxId,
+    sandboxProjectId,
+    sandboxTeamId,
     projectDir: effectiveProjectDir,
     transcriptEntries,
     timing
@@ -4593,7 +4659,13 @@ export async function deepSecStartProcessStep(
   params: DeepSecStepParams,
   preparedState: DeepSecPreparedState
 ): Promise<DeepSecProcessState> {
-  const sandboxParams = { ...params, sandboxId: preparedState.sandboxId, projectDir: preparedState.projectDir }
+  const sandboxParams = {
+    ...params,
+    sandboxId: preparedState.sandboxId,
+    sandboxProjectId: preparedState.sandboxProjectId || params.sandboxProjectId,
+    sandboxTeamId: preparedState.sandboxTeamId || params.sandboxTeamId,
+    projectDir: preparedState.projectDir
+  }
   const { sandbox, effectiveProjectDir } = await reconnectDeepSecSandbox(sandboxParams, { allowRecreate: false })
   const resolvedGatewayAuth = await resolveFreshAiGatewayAuth({
     gatewayAuthSource: params.gatewayAuthSource,
@@ -4665,6 +4737,8 @@ export async function deepSecStartProcessStep(
 
   return {
     sandboxId: preparedState.sandboxId,
+    sandboxProjectId: preparedState.sandboxProjectId || params.sandboxProjectId,
+    sandboxTeamId: preparedState.sandboxTeamId || params.sandboxTeamId,
     projectDir: effectiveProjectDir,
     processStateDir,
     transcriptEntries,
@@ -4677,7 +4751,13 @@ export async function deepSecPollProcessStep(
   params: DeepSecStepParams,
   processState: DeepSecProcessState
 ): Promise<DeepSecProcessPollState> {
-  const sandboxParams = { ...params, sandboxId: processState.sandboxId, projectDir: processState.projectDir }
+  const sandboxParams = {
+    ...params,
+    sandboxId: processState.sandboxId,
+    sandboxProjectId: processState.sandboxProjectId || params.sandboxProjectId,
+    sandboxTeamId: processState.sandboxTeamId || params.sandboxTeamId,
+    projectDir: processState.projectDir
+  }
   const { sandbox } = await reconnectDeepSecSandbox(sandboxParams, { allowRecreate: false })
   const pollScript = `
 const fs = require("node:fs")
@@ -4818,7 +4898,13 @@ export async function deepSecFinalizeStep(
   successEvalResult?: boolean | null
 }> {
   const timer = new StepTimer()
-  const sandboxParams = { ...params, sandboxId: processState.sandboxId, projectDir: processState.projectDir }
+  const sandboxParams = {
+    ...params,
+    sandboxId: processState.sandboxId,
+    sandboxProjectId: processState.sandboxProjectId || params.sandboxProjectId,
+    sandboxTeamId: processState.sandboxTeamId || params.sandboxTeamId,
+    projectDir: processState.projectDir
+  }
   timer.start("Reconnect to sandbox")
   const { sandbox, effectiveProjectDir } = await reconnectDeepSecSandbox(sandboxParams, { allowRecreate: false })
   timer.end()
@@ -5976,6 +6062,13 @@ function decodeJwtPayload(token: string | undefined): Record<string, unknown> | 
   } catch {
     return null
   }
+}
+
+function getOidcSandboxBinding(token: string | undefined): { projectId?: string; teamId?: string } {
+  const payload = decodeJwtPayload(token)
+  const projectId = typeof payload?.project_id === "string" ? payload.project_id.trim() || undefined : undefined
+  const teamId = typeof payload?.owner_id === "string" ? payload.owner_id.trim() || undefined : undefined
+  return { projectId, teamId }
 }
 
 function getJwtExpirationMs(token: string | undefined): number | null {
