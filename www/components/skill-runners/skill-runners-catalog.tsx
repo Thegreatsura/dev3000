@@ -2,7 +2,7 @@
 
 import { AlertCircle, ExternalLink, Play, Plus, Search, X } from "lucide-react"
 import type { Route } from "next"
-import Link from "next/link"
+import Link, { useLinkStatus } from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useDeferredValue, useEffect, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -24,6 +24,17 @@ interface SkillsShSearchResult {
 interface SkillRunnersCatalogProps {
   teamSlug: string
   runners: DevAgent[]
+}
+
+function RunLinkContent() {
+  const { pending } = useLinkStatus()
+
+  return (
+    <>
+      {pending ? <Spinner className="size-3.5" /> : <Play className="size-3.5" />}
+      <span>{pending ? "Opening..." : "Run"}</span>
+    </>
+  )
 }
 
 export function SkillRunnersCatalog({ teamSlug, runners }: SkillRunnersCatalogProps) {
@@ -304,9 +315,8 @@ export function SkillRunnersCatalog({ teamSlug, runners }: SkillRunnersCatalogPr
                 size="sm"
                 className="h-8 rounded-md bg-[#ededed] px-3 text-[13px] font-medium text-[#0a0a0a] hover:bg-white"
               >
-                <Link href={`/${teamSlug}/skill-runner/${runner.id}/new` as Route}>
-                  <Play className="size-3.5" />
-                  Run
+                <Link href={`/${teamSlug}/skill-runner/${runner.id}/new` as Route} aria-label={`Run ${runner.name}`}>
+                  <RunLinkContent />
                 </Link>
               </Button>
             </div>

@@ -8,8 +8,6 @@ import { isV0DevAgentRunnerEnabled } from "@/lib/cloud/dev-agent-runner"
 import { DEV3000_URL } from "@/lib/constants"
 import { getDevAgentsRouteContext } from "@/lib/dev-agents-route"
 import { getDefaultSkillRunnerOpenGraphProfile, getSkillRunner, getSkillRunnerTeamSettings } from "@/lib/skill-runners"
-import { summarizeWorkflowRunsForDevAgent } from "@/lib/workflow-run-stats"
-import { listWorkflowRuns } from "@/lib/workflow-storage"
 
 export async function generateMetadata({
   params
@@ -82,7 +80,6 @@ export default async function RunSkillRunnerPage({ params }: { params: Promise<{
   }
 
   const ownerName = skillRunner.runnerCanonicalPath?.split("/")[0] || "Vercel"
-  const runStats = summarizeWorkflowRunsForDevAgent(await listWorkflowRuns(routeContext.user.id), skillRunner)
 
   return (
     <DevAgentsDashboardShell
@@ -99,7 +96,6 @@ export default async function RunSkillRunnerPage({ params }: { params: Promise<{
         team={selectedTeam}
         user={routeContext.user}
         defaultUseV0DevAgentRunner={isV0DevAgentRunnerEnabled()}
-        runStats={runStats}
         runnerKind="skill-runner"
         skillRunnerExecutionMode={teamSettings.executionMode}
         skillRunnerWorkerBaseUrl={teamSettings.workerBaseUrl}
