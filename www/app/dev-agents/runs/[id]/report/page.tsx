@@ -730,7 +730,9 @@ function extractDeepSecSection(block: string, heading: string): string {
   })
   if (headingIndex < 0) return ""
 
-  const endIndex = lines.findIndex((line, index) => index > headingIndex && /^##\s+/.test(line))
+  const endIndex = lines.findIndex(
+    (line, index) => index > headingIndex && (/^##\s+/.test(line) || /^---+\s*$/.test(line))
+  )
   return lines
     .slice(headingIndex + 1, endIndex < 0 ? undefined : endIndex)
     .join("\n")
@@ -744,7 +746,7 @@ function cleanDeepSecFindingText(value: string): string {
       const labelMatch = match.match(/^\[([^\]]+)\]/)
       return labelMatch?.[1] || match
     })
-    .replace(/[`*_>#]/g, "")
+    .replace(/[`*_#]/g, "")
     .replace(/\s+/g, " ")
     .trim()
 }
