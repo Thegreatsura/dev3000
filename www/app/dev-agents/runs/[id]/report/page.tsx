@@ -793,13 +793,13 @@ function formatDeepSecFindingsTableMarkdown(markdown: string): string | null {
       ? `## Findings: ${findings.length} ${findings[0]?.severity} severity`
       : `## Findings: ${findings.length} total (${severitySummary})`
   const rows = findings.map((finding, index) => {
-    const title = finding.title ? `**${escapeMarkdownTableCell(finding.title)}**` : "Finding"
-    const summary = finding.finding ? ` - ${escapeMarkdownTableCell(finding.finding)}` : ""
+    const title =
+      finding.title || (finding.finding.length > 180 ? `${finding.finding.slice(0, 177)}...` : finding.finding)
     return [
       String(index + 1),
       escapeMarkdownTableCell(finding.severity),
       `\`${escapeMarkdownTableCell(finding.slug)}\``,
-      `${title}${summary}`
+      `**${escapeMarkdownTableCell(title || "Finding")}**`
     ].join(" | ")
   })
 
@@ -810,7 +810,7 @@ function formatDeepSecFindingsTableMarkdown(markdown: string): string | null {
     "| ---: | --- | --- | --- |",
     ...rows.map((row) => `| ${row} |`),
     "",
-    "Detailed findings are available in the downloaded markdown report."
+    "Detailed finding narratives and recommendations are available in the downloaded markdown report."
   ].join("\n")
 }
 
