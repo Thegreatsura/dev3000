@@ -641,6 +641,14 @@ interface GeneratedReportScanScope {
   model?: string
 }
 
+interface DeepSecFindingSummary {
+  confidence?: string
+  finding: string
+  severity: string
+  slug: string
+  title: string
+}
+
 function getGeneratedReportScanScope(markdown: string): GeneratedReportScanScope {
   const scopeSection = extractGeneratedReportSection(markdown.replace(/```[\s\S]*?```/g, ""), /^Scan Scope$/i)
   const scope: GeneratedReportScanScope = {}
@@ -705,6 +713,105 @@ function stripGeneratedReportWebOnlySections(markdown: string): string {
 
 function stripGeneratedReportCodeFenceLabels(markdown: string): string {
   return markdown.replace(/^```[A-Za-z0-9_+.-]+[^\n]*$/gm, "```")
+}
+
+function extractDeepSecSection(block: string, heading: string): string {
+  const lines = block.split("\n")
+  const headingIndex = lines.findIndex((line) => {
+    const match = line.match(/^##\s+(.+?)\s*$/)
+    return match ? match[1].trim().toLowerCase() === heading.toLowerCase() : false
+  })
+  if (headingIndex < 0) return ""
+
+  const endIndex = lines.findIndex((line, index) => index > headingIndex && /^##\s+/.test(line))
+  return lines
+    .slice(headingIndex + 1, endIndex < 0 ? undefined : endIndex)
+    .join("\n")
+    .trim()
+}
+
+function cleanDeepSecFindingText(value: string): string {
+  return value
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\[[^\]]+\]\([^)]+\)/g, (match) => {
+      const labelMatch = match.match(/^\[([^\]]+)\]/)
+      return labelMatch?.[1] || match
+    })
+    .replace(/[`*_>#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function escapeMarkdownTableCell(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ").trim()
+}
+
+function parseDeepSecExportedFindings(markdown: string): DeepSecFindingSummary[] {
+  const blocks = markdown
+    .split(/(?=^<!-- Source:\s+\.deepsec\/findings\/)/gm)
+    .map((block) => block.trim())
+    .filter(Boolean)
+  const candidateBlocks = blocks.length > 1 ? blocks : markdown.split(/(?=^#\s+\[[^\]]+\]\s+)/gm)
+  const findings: DeepSecFindingSummary[] = []
+
+  for (const block of candidateBlocks) {
+    const titleMatch = block.match(/^#\s+\[([^\]]+)\]\s+(.+?)\s*$/m)
+    if (!titleMatch) continue
+
+    const metadataLine = block.match(/\*\*Severity:\*\*([\s\S]*?)(?:\n|$)/)?.[1] || ""
+    const severityMatch = metadataLine.match(/^\s*([^•\n]+)/)
+    const confidenceMatch = metadataLine.match(/\*\*Confidence:\*\*\s*([^•\n]+)/)
+    const slugMatch = metadataLine.match(/\*\*Slug:\*\*\s*`?([^`\n]+)`?/)
+    const findingSection = extractDeepSecSection(block, "Finding")
+    const findingText = cleanDeepSecFindingText(findingSection)
+
+    findings.push({
+      confidence: confidenceMatch?.[1]?.trim(),
+      finding: findingText || cleanDeepSecFindingText(titleMatch[2]),
+      severity: (severityMatch?.[1] || titleMatch[1]).trim().toUpperCase(),
+      slug: slugMatch?.[1]?.trim() || "unknown",
+      title: cleanDeepSecFindingText(titleMatch[2])
+    })
+  }
+
+  return findings
+}
+
+function formatDeepSecFindingsTableMarkdown(markdown: string): string | null {
+  const findings = parseDeepSecExportedFindings(markdown)
+  if (findings.length === 0) return null
+
+  const severityCounts = findings.reduce<Record<string, number>>((counts, finding) => {
+    counts[finding.severity] = (counts[finding.severity] || 0) + 1
+    return counts
+  }, {})
+  const severitySummary = Object.entries(severityCounts)
+    .map(([severity, count]) => `${count} ${severity}`)
+    .join(", ")
+  const heading =
+    Object.keys(severityCounts).length === 1
+      ? `## Findings: ${findings.length} ${findings[0]?.severity} severity`
+      : `## Findings: ${findings.length} total (${severitySummary})`
+  const rows = findings.map((finding, index) => {
+    const title = finding.title ? `**${escapeMarkdownTableCell(finding.title)}**` : "Finding"
+    const summary = finding.finding ? ` - ${escapeMarkdownTableCell(finding.finding)}` : ""
+    return [
+      String(index + 1),
+      escapeMarkdownTableCell(finding.severity),
+      `\`${escapeMarkdownTableCell(finding.slug)}\``,
+      `${title}${summary}`
+    ].join(" | ")
+  })
+
+  return [
+    heading,
+    "",
+    "| # | Severity | Slug | Finding |",
+    "| ---: | --- | --- | --- |",
+    ...rows.map((row) => `| ${row} |`),
+    "",
+    "Detailed findings are available in the downloaded markdown report."
+  ].join("\n")
 }
 
 function extractLeadingReportHeading(markdown: string): { title: string; body: string } {
@@ -1498,7 +1605,8 @@ function ReportContentBody({ run, report, runsHref }: { run: WorkflowRun; report
   const generatedReportDisplay = extractLeadingReportHeading(generatedReportWebMarkdown)
   const generatedReportBody =
     workflowType === "deepsec-security-scan"
-      ? moveGeneratedReportSectionToTop(generatedReportDisplay.body, /^Findings:/i)
+      ? formatDeepSecFindingsTableMarkdown(generatedReportMarkdown) ||
+        moveGeneratedReportSectionToTop(generatedReportDisplay.body, /^Findings:/i)
       : generatedReportDisplay.body
   const generatedReportCost =
     workflowType === "deepsec-security-scan" ? getGeneratedReportCostUsd(generatedReportMarkdown) : null
