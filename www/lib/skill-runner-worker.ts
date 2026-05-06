@@ -149,6 +149,9 @@ interface VercelBlobStoreCreateResponse {
 
 const LEGACY_WORKER_METADATA_ENV_KEYS = new Set(["SKILL_RUNNER_WORKER_MODE", "SKILL_RUNNER_WORKER_SHELL_VERSION"])
 const REQUIRED_SELF_HOSTED_WORKER_ENV_KEYS = ["BLOB_READ_WRITE_TOKEN"] as const
+const PRO_WORKER_START_MAX_DURATION_SECONDS = 600
+const PRO_WORKER_STEP_MAX_DURATION_SECONDS = 800
+const HOBBY_WORKER_MAX_DURATION_SECONDS = 300
 const SELF_HOSTED_BLOB_STORE_REGION = "iad1"
 const SELF_HOSTED_BLOB_ENVIRONMENTS = ["production", "preview", "development"] as const
 const INITIAL_DEPLOYMENT_POLL_ATTEMPTS = 8
@@ -223,8 +226,51 @@ function buildDashboardUrl(team: VercelTeam, projectName: string): string {
   return `https://vercel.com/${encodeURIComponent(team.slug)}/${encodeURIComponent(projectName)}`
 }
 
-function isSkillRunnerWorkerProjectName(name: string | undefined): boolean {
-  return name === SKILL_RUNNER_WORKER_PROJECT_NAME || name?.toLowerCase() === SKILL_RUNNER_WORKER_PROJECT_NAME
+function normalizeProjectName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+}
+
+function buildFallbackWorkerProjectName(team: VercelTeam): string {
+  const suffix = normalizeProjectName(team.slug || team.id.replace(/^team_/, "")) || "team"
+  return `${SKILL_RUNNER_WORKER_PROJECT_NAME}-${suffix}`.slice(0, 100).replace(/-$/g, "")
+}
+
+function isHobbyWorkerTeam(team: VercelTeam): boolean {
+  return team.isPersonal || team.planLabel === "Hobby"
+}
+
+function resolveWorkerDurationConfig(team: VercelTeam): {
+  maxFunctionDurationSeconds: number
+  maxWorkflowStepDurationSeconds: number
+} {
+  if (isHobbyWorkerTeam(team)) {
+    return {
+      maxFunctionDurationSeconds: HOBBY_WORKER_MAX_DURATION_SECONDS,
+      maxWorkflowStepDurationSeconds: HOBBY_WORKER_MAX_DURATION_SECONDS
+    }
+  }
+
+  return {
+    maxFunctionDurationSeconds: PRO_WORKER_START_MAX_DURATION_SECONDS,
+    maxWorkflowStepDurationSeconds: PRO_WORKER_STEP_MAX_DURATION_SECONDS
+  }
+}
+
+function getWorkerProjectNames(team: VercelTeam): string[] {
+  const fallbackName = buildFallbackWorkerProjectName(team)
+  return fallbackName === SKILL_RUNNER_WORKER_PROJECT_NAME
+    ? [SKILL_RUNNER_WORKER_PROJECT_NAME]
+    : [SKILL_RUNNER_WORKER_PROJECT_NAME, fallbackName]
+}
+
+function isSkillRunnerWorkerProjectName(name: string | undefined, team: VercelTeam): boolean {
+  const normalizedName = normalizeProjectName(name || "")
+  return getWorkerProjectNames(team).some((projectName) => normalizedName === projectName)
 }
 
 function sanitizeBlobStoreNameSegment(value: string): string {
@@ -308,7 +354,7 @@ function buildInitialDeploymentCreateError(
   ) {
     return new SkillRunnerWorkerSetupError(
       message ||
-        `The runner project exists, but Vercel could not start a deployment from ${SKILL_RUNNER_WORKER_REPO}. Open the runner project, review its source-repo access, then retry setup.`,
+        "The runner project exists, but Vercel could not start its deployment. Open the runner project, review the deployment error, then retry setup.",
       {
         code: /install github app|github integration/i.test(searchableText)
           ? "github_integration_required"
@@ -474,6 +520,11 @@ export function resolveSkillRunnerWorkerStatus(
   if (project.latestDeploymentReadyState && project.latestDeploymentReadyState !== "READY") return "provisioning"
   if (project.shellVersionStatus === "outdated") return "outdated"
   return "ready"
+}
+
+function isFailedDeploymentState(state: string | undefined): boolean {
+  const normalizedState = state?.trim().toUpperCase()
+  return normalizedState === "ERROR" || normalizedState === "FAILED" || normalizedState === "CANCELED"
 }
 
 async function listTeamBlobStores(accessToken: string, team: VercelTeam) {
@@ -748,8 +799,10 @@ async function createInitialWorkerDeployment(
   }
 
   const source = await resolveSkillRunnerShellSource(workerShellVersion, workerShellVersion)
+  const durationConfig = resolveWorkerDurationConfig(team)
   const files = await uploadSkillRunnerShellSourceFiles({
     accessToken,
+    ...durationConfig,
     source,
     teamId: team.id
   })
@@ -779,6 +832,8 @@ async function createInitialWorkerDeployment(
       meta: {
         d3kSkillRunnerShellCommit: source.commit,
         d3kSkillRunnerShellVersion: source.version,
+        d3kSkillRunnerMaxFunctionDuration: String(durationConfig.maxFunctionDurationSeconds),
+        d3kSkillRunnerMaxWorkflowStepDuration: String(durationConfig.maxWorkflowStepDurationSeconds),
         d3kSkillRunnerSource: "deployment-files"
       },
       projectSettings: {
@@ -850,7 +905,7 @@ async function resolveSkillRunnerWorkerProjectFromLookupProject(
   team: VercelTeam,
   project: VercelProjectLookupProject
 ): Promise<SkillRunnerWorkerProject | null> {
-  if (!project.id || typeof project.name !== "string" || !isSkillRunnerWorkerProjectName(project.name)) {
+  if (!project.id || typeof project.name !== "string" || !isSkillRunnerWorkerProjectName(project.name, team)) {
     return null
   }
 
@@ -952,7 +1007,7 @@ async function findSkillRunnerWorkerProjectFromProjectList(
 
     const data = (await response.json()) as VercelProjectLookupResponse
     const projects = Array.isArray(data.projects) ? data.projects : []
-    const exactMatch = projects.find((project) => isSkillRunnerWorkerProjectName(project.name))
+    const exactMatch = projects.find((project) => isSkillRunnerWorkerProjectName(project.name, team))
 
     if (exactMatch?.id && exactMatch.name) {
       return resolveSkillRunnerWorkerProjectFromLookupProject(accessToken, team, exactMatch)
@@ -970,9 +1025,10 @@ async function findSkillRunnerWorkerProjectFromProjectList(
 
 async function getSkillRunnerWorkerProjectByName(
   accessToken: string,
-  team: VercelTeam
+  team: VercelTeam,
+  projectName: string
 ): Promise<SkillRunnerWorkerProject | null> {
-  const apiUrl = new URL(`https://api.vercel.com/v9/projects/${encodeURIComponent(SKILL_RUNNER_WORKER_PROJECT_NAME)}`)
+  const apiUrl = new URL(`https://api.vercel.com/v9/projects/${encodeURIComponent(projectName)}`)
   apiUrl.searchParams.set("teamId", team.id)
 
   const response = await fetch(apiUrl.toString(), {
@@ -999,14 +1055,18 @@ export async function findSkillRunnerWorkerProject(
   accessToken: string,
   team: VercelTeam
 ): Promise<SkillRunnerWorkerProject | null> {
-  const searchMatch = await findSkillRunnerWorkerProjectFromProjectList(accessToken, team, {
-    maxPages: 2,
-    search: SKILL_RUNNER_WORKER_PROJECT_NAME
-  })
-  if (searchMatch) return searchMatch
+  for (const projectName of getWorkerProjectNames(team)) {
+    const searchMatch = await findSkillRunnerWorkerProjectFromProjectList(accessToken, team, {
+      maxPages: 2,
+      search: projectName
+    })
+    if (searchMatch) return searchMatch
+  }
 
-  const directMatch = await getSkillRunnerWorkerProjectByName(accessToken, team)
-  if (directMatch) return directMatch
+  for (const projectName of getWorkerProjectNames(team)) {
+    const directMatch = await getSkillRunnerWorkerProjectByName(accessToken, team, projectName)
+    if (directMatch) return directMatch
+  }
 
   return findSkillRunnerWorkerProjectFromProjectList(accessToken, team, {
     maxPages: 5
@@ -1080,6 +1140,16 @@ export async function installSkillRunnerWorkerProject(
   if (redeployedId) {
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const resolved = await findSkillRunnerWorkerProject(accessToken, team)
+      if (resolved && isFailedDeploymentState(resolved.latestDeploymentReadyState)) {
+        throw new SkillRunnerWorkerSetupError(
+          "The runner project was created, but its first deployment failed in Vercel. Open the runner project, review the deployment error, then retry setup.",
+          {
+            code: "initial_deployment_missing",
+            actionLabel: "Open Runner Project",
+            actionUrl: resolved.dashboardUrl
+          }
+        )
+      }
       if (
         resolved?.workerBaseUrl &&
         (!resolved.missingEnvKeys || resolved.missingEnvKeys.length === 0) &&
@@ -1107,51 +1177,54 @@ export async function installSkillRunnerWorkerProject(
 }
 
 async function createWorkerProject(accessToken: string, team: VercelTeam): Promise<SkillRunnerWorkerProject> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const apiUrl = new URL("https://api.vercel.com/v11/projects")
-    apiUrl.searchParams.set("teamId", team.id)
+  for (const projectName of getWorkerProjectNames(team)) {
+    const maxAttempts = projectName === SKILL_RUNNER_WORKER_PROJECT_NAME ? 2 : 4
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const apiUrl = new URL("https://api.vercel.com/v11/projects")
+      apiUrl.searchParams.set("teamId", team.id)
 
-    const response = await fetch(apiUrl.toString(), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        name: SKILL_RUNNER_WORKER_PROJECT_NAME,
-        framework: "nextjs",
-        rootDirectory: SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
-        skipGitConnectDuringLink: true
-      }),
-      cache: "no-store"
-    })
+      const response = await fetch(apiUrl.toString(), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name: projectName,
+          framework: "nextjs",
+          rootDirectory: SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
+          skipGitConnectDuringLink: true
+        }),
+        cache: "no-store"
+      })
 
-    if (response.ok) {
-      const created = (await response.json()) as VercelProjectCreateResponse
-      if (!created.id || !created.name) {
-        throw new Error("Runner project was created but the response was incomplete.")
+      if (response.ok) {
+        const created = (await response.json()) as VercelProjectCreateResponse
+        if (!created.id || !created.name) {
+          throw new Error("Runner project was created but the response was incomplete.")
+        }
+
+        return {
+          projectId: created.id,
+          projectName: created.name,
+          dashboardUrl: buildDashboardUrl(team, created.name)
+        }
       }
 
-      return {
-        projectId: created.id,
-        projectName: created.name,
-        dashboardUrl: buildDashboardUrl(team, created.name)
+      const errorText = await response.text()
+      if (response.status === 409 || /already exists|conflict/i.test(errorText)) {
+        const existing = await findExistingWorkerProjectAfterCreateConflict(accessToken, team)
+        if (existing) return existing
+        await sleep(1500 * (attempt + 1))
+        continue
       }
-    }
 
-    const errorText = await response.text()
-    if (response.status === 409 || /already exists|conflict/i.test(errorText)) {
-      const existing = await findExistingWorkerProjectAfterCreateConflict(accessToken, team)
-      if (existing) return existing
-      await sleep(1500 * (attempt + 1))
-      continue
+      throw buildWorkerProjectCreateError(response.status, errorText)
     }
-
-    throw buildWorkerProjectCreateError(response.status, errorText)
   }
 
   throw new SkillRunnerWorkerSetupError(
-    `Vercel still has the ${SKILL_RUNNER_WORKER_PROJECT_NAME} project name reserved for ${team.name}, but dev3000 could not inspect a live project yet. Wait a moment, then retry setup.`,
+    `Vercel still has the ${SKILL_RUNNER_WORKER_PROJECT_NAME} project name reserved for ${team.name}, but dev3000 could not inspect a live project yet. Open Vercel Projects, delete any stale runner project if one appears, then retry setup.`,
     {
       code: "unknown",
       actionLabel: "Open Vercel Projects",

@@ -161,7 +161,11 @@ function formatExecutionMode(mode: DevAgent["executionMode"]): string {
 }
 
 function isSkillRunnerWorkerProject(project: Pick<Project, "name">): boolean {
-  return project.name === SKILL_RUNNER_WORKER_PROJECT_NAME
+  const normalizedName = project.name.trim().toLowerCase()
+  return (
+    normalizedName === SKILL_RUNNER_WORKER_PROJECT_NAME ||
+    normalizedName.startsWith(`${SKILL_RUNNER_WORKER_PROJECT_NAME}-`)
+  )
 }
 
 function getProjectGitHubRepo(project: Project): { owner: string; repo: string } | null {
@@ -1349,11 +1353,11 @@ export default function DevAgentRunClient({
                         </>
                       ) : workerSetupError.code === "initial_deployment_missing" ? (
                         <>
-                          The runner project exists, but its source repo still is not deployable for this team. Open the
-                          project, fix repo access, then come back and retry setup.
+                          The runner project exists, but its latest deployment did not finish successfully. Open the
+                          project, review the deployment error, then come back and retry setup.
                         </>
                       ) : (
-                        <>Open the runner setup surface, fix the prerequisite, then come back and retry setup.</>
+                        <>Open Vercel Projects, remove any stale runner project if it appears, then retry setup.</>
                       )}
                     </div>
                   ) : null}

@@ -132,6 +132,90 @@ async function fetchSourceFile(file: SkillRunnerShellManifestFile): Promise<Uint
   return new Uint8Array(await response.arrayBuffer())
 }
 
+function patchWorkflowConfigJson(content: string, maxDurationSeconds: number): string {
+  try {
+    const parsed = JSON.parse(content) as {
+      steps?: {
+        maxDuration?: unknown
+      }
+    }
+    if (!parsed.steps || parsed.steps.maxDuration === maxDurationSeconds) {
+      return content
+    }
+
+    parsed.steps.maxDuration = maxDurationSeconds
+    return `${JSON.stringify(parsed, null, 2)}\n`
+  } catch {
+    return content
+  }
+}
+
+function patchRunnerShellTextFile({
+  content,
+  file,
+  maxFunctionDurationSeconds,
+  maxWorkflowStepDurationSeconds
+}: {
+  content: string
+  file: SkillRunnerShellManifestFile
+  maxFunctionDurationSeconds?: number
+  maxWorkflowStepDurationSeconds?: number
+}): string {
+  if (
+    maxFunctionDurationSeconds &&
+    file.path === `${SKILL_RUNNER_WORKER_ROOT_DIRECTORY}/app/api/cloud/start-fix/route.ts`
+  ) {
+    return content.replace(
+      /export const maxDuration = \d+/g,
+      `export const maxDuration = ${maxFunctionDurationSeconds}`
+    )
+  }
+
+  if (
+    maxWorkflowStepDurationSeconds &&
+    file.path === `${SKILL_RUNNER_WORKER_ROOT_DIRECTORY}/scripts/patch-workflow-vercel-config.mjs`
+  ) {
+    return content.replace(/steps:\s*\d+,/g, `steps: ${maxWorkflowStepDurationSeconds},`)
+  }
+
+  if (
+    maxWorkflowStepDurationSeconds &&
+    file.path === `${SKILL_RUNNER_WORKER_ROOT_DIRECTORY}/app/.well-known/workflow/v1/config.json`
+  ) {
+    return patchWorkflowConfigJson(content, maxWorkflowStepDurationSeconds)
+  }
+
+  return content
+}
+
+function patchRunnerShellFile({
+  bytes,
+  file,
+  maxFunctionDurationSeconds,
+  maxWorkflowStepDurationSeconds
+}: {
+  bytes: Uint8Array
+  file: SkillRunnerShellManifestFile
+  maxFunctionDurationSeconds?: number
+  maxWorkflowStepDurationSeconds?: number
+}): Uint8Array {
+  if (!maxFunctionDurationSeconds && !maxWorkflowStepDurationSeconds) {
+    return bytes
+  }
+
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  const content = decoder.decode(bytes)
+  const patched = patchRunnerShellTextFile({
+    content,
+    file,
+    maxFunctionDurationSeconds,
+    maxWorkflowStepDurationSeconds
+  })
+
+  return patched === content ? bytes : encoder.encode(patched)
+}
+
 async function uploadDeploymentFile({
   accessToken,
   bytes,
@@ -170,15 +254,25 @@ async function uploadDeploymentFile({
 
 export async function uploadSkillRunnerShellSourceFiles({
   accessToken,
+  maxFunctionDurationSeconds,
+  maxWorkflowStepDurationSeconds,
   source,
   teamId
 }: {
   accessToken: string
+  maxFunctionDurationSeconds?: number
+  maxWorkflowStepDurationSeconds?: number
   source: SkillRunnerShellSource
   teamId: string
 }): Promise<VercelUploadedDeploymentFile[]> {
   return mapWithConcurrency(source.files, RUNNER_SHELL_UPLOAD_CONCURRENCY, async (file) => {
-    const bytes = await fetchSourceFile(file)
+    const sourceBytes = await fetchSourceFile(file)
+    const bytes = patchRunnerShellFile({
+      bytes: sourceBytes,
+      file,
+      maxFunctionDurationSeconds,
+      maxWorkflowStepDurationSeconds
+    })
     const sha = createHash("sha1").update(bytes).digest("hex")
     const size = bytes.byteLength
     await uploadDeploymentFile({

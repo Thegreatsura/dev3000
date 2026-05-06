@@ -42,7 +42,8 @@ import { cloudFixWorkflow } from "../fix-workflow/workflow"
  * where the fix proposal was uploaded.
  */
 
-// Configure longer timeout for workflow execution (10 minutes)
+// Configure longer timeout for workflow startup on Pro/Enterprise runners.
+// Hobby runner deployments patch this value down to their plan limit at upload time.
 export const maxDuration = 600
 
 // CORS headers - allowing credentials from localhost
