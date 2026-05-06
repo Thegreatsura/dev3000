@@ -643,9 +643,16 @@ interface GeneratedReportScanScope {
 
 interface DeepSecFindingSummary {
   confidence?: string
+  fileLabel?: string
+  fileLocation?: string
+  fileUrl?: string
   finding: string
+  owners: string[]
+  recommendation?: string
+  recentCommitters: string[]
   severity: string
   slug: string
+  sourcePath?: string
   title: string
 }
 
@@ -746,6 +753,32 @@ function escapeMarkdownTableCell(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ").trim()
 }
 
+function cleanDeepSecDetailLine(value: string): string {
+  return cleanDeepSecFindingText(value.replace(/^[-*]\s+/, ""))
+}
+
+function parseDeepSecListSection(value: string): string[] {
+  return value.split("\n").map(cleanDeepSecDetailLine).filter(Boolean)
+}
+
+function parseDeepSecFileLine(block: string): Pick<DeepSecFindingSummary, "fileLabel" | "fileLocation" | "fileUrl"> {
+  const fileLine = block.match(/\*\*File:\*\*\s*(.+?)(?:\n|$)/)?.[1]?.trim()
+  if (!fileLine) return {}
+
+  const linkedFileMatch = fileLine.match(/\[`?([^`\]]+)`?\]\(([^)]+)\)\s*(.*)$/)
+  if (linkedFileMatch) {
+    return {
+      fileLabel: linkedFileMatch[1].trim(),
+      fileLocation: cleanDeepSecFindingText(linkedFileMatch[3] || ""),
+      fileUrl: linkedFileMatch[2].trim()
+    }
+  }
+
+  return {
+    fileLabel: cleanDeepSecFindingText(fileLine)
+  }
+}
+
 function parseDeepSecExportedFindings(markdown: string): DeepSecFindingSummary[] {
   const blocks = markdown
     .split(/(?=^<!-- Source:\s+\.deepsec\/findings\/)/gm)
@@ -764,12 +797,18 @@ function parseDeepSecExportedFindings(markdown: string): DeepSecFindingSummary[]
     const slugMatch = metadataLine.match(/\*\*Slug:\*\*\s*`?([^`\n]+)`?/)
     const findingSection = extractDeepSecSection(block, "Finding")
     const findingText = cleanDeepSecFindingText(findingSection)
+    const sourcePath = block.match(/^<!-- Source:\s+(.+?)\s+-->/m)?.[1]?.trim()
 
     findings.push({
       confidence: confidenceMatch?.[1]?.trim(),
+      ...parseDeepSecFileLine(block),
       finding: findingText || cleanDeepSecFindingText(titleMatch[2]),
+      owners: parseDeepSecListSection(extractDeepSecSection(block, "Owners")),
+      recommendation: cleanDeepSecFindingText(extractDeepSecSection(block, "Recommendation")),
+      recentCommitters: parseDeepSecListSection(extractDeepSecSection(block, "Recent committers (`git log`)")),
       severity: (severityMatch?.[1] || titleMatch[1]).trim().toUpperCase(),
       slug: slugMatch?.[1]?.trim() || "unknown",
+      sourcePath,
       title: cleanDeepSecFindingText(titleMatch[2])
     })
   }
@@ -777,10 +816,7 @@ function parseDeepSecExportedFindings(markdown: string): DeepSecFindingSummary[]
   return findings
 }
 
-function formatDeepSecFindingsTableMarkdown(markdown: string): string | null {
-  const findings = parseDeepSecExportedFindings(markdown)
-  if (findings.length === 0) return null
-
+function getDeepSecFindingsHeading(findings: DeepSecFindingSummary[]): string {
   const severityCounts = findings.reduce<Record<string, number>>((counts, finding) => {
     counts[finding.severity] = (counts[finding.severity] || 0) + 1
     return counts
@@ -788,10 +824,12 @@ function formatDeepSecFindingsTableMarkdown(markdown: string): string | null {
   const severitySummary = Object.entries(severityCounts)
     .map(([severity, count]) => `${count} ${severity}`)
     .join(", ")
-  const heading =
-    Object.keys(severityCounts).length === 1
-      ? `## Findings: ${findings.length} ${findings[0]?.severity} severity`
-      : `## Findings: ${findings.length} total (${severitySummary})`
+  return Object.keys(severityCounts).length === 1
+    ? `Findings: ${findings.length} ${findings[0]?.severity} severity`
+    : `Findings: ${findings.length} total (${severitySummary})`
+}
+
+function formatDeepSecFindingsTableMarkdown(findings: DeepSecFindingSummary[]): string {
   const rows = findings.map((finding, index) => {
     const title =
       finding.title || (finding.finding.length > 180 ? `${finding.finding.slice(0, 177)}...` : finding.finding)
@@ -804,7 +842,7 @@ function formatDeepSecFindingsTableMarkdown(markdown: string): string | null {
   })
 
   return [
-    heading,
+    `## ${getDeepSecFindingsHeading(findings)}`,
     "",
     "| # | Severity | Slug | Finding |",
     "| ---: | --- | --- | --- |",
@@ -812,6 +850,131 @@ function formatDeepSecFindingsTableMarkdown(markdown: string): string | null {
     "",
     "Detailed finding narratives and recommendations are available in the downloaded markdown report."
   ].join("\n")
+}
+
+function DetailList({ items }: { items: string[] }) {
+  if (items.length === 0) return null
+
+  return (
+    <ul className="mt-1 space-y-1">
+      {items.map((item) => (
+        <li key={item} className="text-sm text-muted-foreground">
+          {item}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function FindingDetail({ label, children }: { label: string; children: ReactNode }) {
+  if (!children) return null
+
+  return (
+    <div>
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-sm leading-relaxed text-foreground/85">{children}</div>
+    </div>
+  )
+}
+
+function DeepSecFindingsTable({ findings }: { findings: DeepSecFindingSummary[] }) {
+  return (
+    <div>
+      <h2 className="mb-8 text-4xl font-bold tracking-tight text-foreground">{getDeepSecFindingsHeading(findings)}</h2>
+      <div className="overflow-hidden rounded-md border border-border bg-background">
+        <table className="w-full table-auto divide-y divide-border text-sm">
+          <thead>
+            <tr>
+              <th className="w-px whitespace-nowrap px-4 py-3 text-right font-semibold text-foreground">#</th>
+              <th className="w-px whitespace-nowrap px-4 py-3 text-left font-semibold text-foreground">Severity</th>
+              <th className="w-px whitespace-nowrap px-4 py-3 text-left font-semibold text-foreground">Slug</th>
+              <th className="px-4 py-3 text-left font-semibold text-foreground">Finding</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {findings.map((finding, index) => {
+              const title =
+                finding.title ||
+                (finding.finding.length > 180 ? `${finding.finding.slice(0, 177)}...` : finding.finding)
+              const hasDetails = Boolean(
+                finding.fileLabel ||
+                  finding.confidence ||
+                  finding.owners.length ||
+                  finding.recentCommitters.length ||
+                  finding.finding ||
+                  finding.recommendation ||
+                  finding.sourcePath
+              )
+
+              return (
+                <tr key={finding.sourcePath || `${finding.slug}-${finding.title}`}>
+                  <td className="w-px whitespace-nowrap px-4 py-4 text-right align-top text-foreground">{index + 1}</td>
+                  <td className="w-px whitespace-nowrap px-4 py-4 align-top text-foreground">{finding.severity}</td>
+                  <td className="w-px whitespace-nowrap px-4 py-4 align-top font-mono text-foreground">
+                    {finding.slug}
+                  </td>
+                  <td className="px-4 py-4 align-top">
+                    <div className="font-semibold leading-snug text-foreground">{title || "Finding"}</div>
+                    {hasDetails ? (
+                      <details className="group mt-3">
+                        <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-sm text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+                          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+                          Details
+                        </summary>
+                        <div className="mt-4 grid gap-4 rounded-md border border-border/70 bg-muted/20 p-4">
+                          {finding.fileLabel ? (
+                            <FindingDetail label="File">
+                              {finding.fileUrl ? (
+                                <a
+                                  href={finding.fileUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="font-mono text-foreground underline-offset-4 hover:underline"
+                                >
+                                  {finding.fileLabel}
+                                </a>
+                              ) : (
+                                <span className="font-mono">{finding.fileLabel}</span>
+                              )}
+                              {finding.fileLocation ? (
+                                <span className="ml-2 text-muted-foreground">{finding.fileLocation}</span>
+                              ) : null}
+                            </FindingDetail>
+                          ) : null}
+                          {finding.confidence ? (
+                            <FindingDetail label="Confidence">{finding.confidence}</FindingDetail>
+                          ) : null}
+                          {finding.owners.length > 0 ? (
+                            <FindingDetail label="Owners">
+                              <DetailList items={finding.owners} />
+                            </FindingDetail>
+                          ) : null}
+                          {finding.recentCommitters.length > 0 ? (
+                            <FindingDetail label="Recent committers">
+                              <DetailList items={finding.recentCommitters} />
+                            </FindingDetail>
+                          ) : null}
+                          {finding.finding ? <FindingDetail label="Finding">{finding.finding}</FindingDetail> : null}
+                          {finding.recommendation ? (
+                            <FindingDetail label="Recommendation">{finding.recommendation}</FindingDetail>
+                          ) : null}
+                          {finding.sourcePath ? (
+                            <FindingDetail label="Source">
+                              <span className="font-mono">{finding.sourcePath}</span>
+                            </FindingDetail>
+                          ) : null}
+                        </div>
+                      </details>
+                    ) : null}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
 }
 
 function extractLeadingReportHeading(markdown: string): { title: string; body: string } {
@@ -1603,9 +1766,11 @@ function ReportContentBody({ run, report, runsHref }: { run: WorkflowRun; report
     stripGeneratedReportWebOnlySections(generatedReportMarkdown)
   )
   const generatedReportDisplay = extractLeadingReportHeading(generatedReportWebMarkdown)
+  const deepSecFindings =
+    workflowType === "deepsec-security-scan" ? parseDeepSecExportedFindings(generatedReportMarkdown) : []
   const generatedReportBody =
     workflowType === "deepsec-security-scan"
-      ? formatDeepSecFindingsTableMarkdown(generatedReportMarkdown) ||
+      ? (deepSecFindings.length > 0 ? formatDeepSecFindingsTableMarkdown(deepSecFindings) : null) ||
         moveGeneratedReportSectionToTop(generatedReportDisplay.body, /^Findings:/i)
       : generatedReportDisplay.body
   const generatedReportCost =
@@ -1862,19 +2027,23 @@ function ReportContentBody({ run, report, runsHref }: { run: WorkflowRun; report
 
       {workflowType === "deepsec-security-scan" && generatedReportMarkdown ? (
         <GeneratedReportSection>
-          <AgentAnalysis
-            content={generatedReportBody}
-            controls={{
-              code: { copy: false, download: false },
-              table: false,
-              mermaid: { copy: true, download: false, fullscreen: false, panZoom: true }
-            }}
-            nowrapTableColumn={3}
-            plainCodeBlocks
-            plainTables
-            compactLists
-            topAlignTables
-          />
+          {deepSecFindings.length > 0 ? (
+            <DeepSecFindingsTable findings={deepSecFindings} />
+          ) : (
+            <AgentAnalysis
+              content={generatedReportBody}
+              controls={{
+                code: { copy: false, download: false },
+                table: false,
+                mermaid: { copy: true, download: false, fullscreen: false, panZoom: true }
+              }}
+              nowrapTableColumn={3}
+              plainCodeBlocks
+              plainTables
+              compactLists
+              topAlignTables
+            />
+          )}
         </GeneratedReportSection>
       ) : null}
 
