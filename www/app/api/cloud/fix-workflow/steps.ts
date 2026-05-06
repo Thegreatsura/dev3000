@@ -4531,7 +4531,7 @@ async function reconnectDeepSecSandbox(
   sandboxProjectId?: string
   sandboxTeamId?: string
 }> {
-  const vercelApiTokens = getVercelApiTokenCandidates(params.vercelOidcToken)
+  const gatewaySandboxBinding = getOidcSandboxBinding(params.gatewayAuthToken)
   const effectiveSandboxBinding = resolveEffectiveSandboxBinding({
     fallbackToken: params.gatewayAuthToken || params.vercelOidcToken,
     projectId: params.projectId,
@@ -4539,8 +4539,14 @@ async function reconnectDeepSecSandbox(
     sandboxTeamId: params.sandboxTeamId,
     teamId: params.teamId
   })
+  const usesGatewaySandboxBinding =
+    gatewaySandboxBinding.projectId &&
+    gatewaySandboxBinding.teamId &&
+    gatewaySandboxBinding.projectId === effectiveSandboxBinding.projectId &&
+    gatewaySandboxBinding.teamId === effectiveSandboxBinding.teamId
+  const vercelApiTokens = usesGatewaySandboxBinding ? [] : getVercelApiTokenCandidates(params.vercelOidcToken)
   workflowLog(
-    `[DeepSec] Sandbox binding resolved: project=${effectiveSandboxBinding.projectId ? "present" : "missing"}, team=${effectiveSandboxBinding.teamId ? "present" : "missing"}, tokens=${vercelApiTokens.length}`
+    `[DeepSec] Sandbox binding resolved: project=${effectiveSandboxBinding.projectId ? "present" : "missing"}, team=${effectiveSandboxBinding.teamId ? "present" : "missing"}, credentialMode=${usesGatewaySandboxBinding ? "runtime-oidc" : "project-scoped"}`
   )
 
   try {
@@ -4680,6 +4686,7 @@ export async function deepSecStartProcessStep(
   const processCommand = "cd .deepsec && corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3"
   const startedAtMs = Date.now()
 
+  await updateProgress(params.progressContext, 3, "Processing DeepSec candidates...", params.devUrl)
   await appendProgressLog(params.progressContext, "[Agent] AI Gateway connected")
   await appendProgressLog(params.progressContext, "[DeepSec] Process candidates...")
 
@@ -4834,6 +4841,7 @@ process.stdout.write(JSON.stringify({
   }
 
   if (parsed.running || parsed.exitCode === null) {
+    await updateProgress(params.progressContext, 3, "Processing DeepSec candidates...", params.devUrl)
     await appendProgressLog(
       params.progressContext,
       `[DeepSec] Process candidates still running (${parsed.elapsedSeconds}s elapsed)`
@@ -4912,6 +4920,7 @@ export async function deepSecFinalizeStep(
   const projectRoot = getSandboxProjectRoot(effectiveProjectDir)
   const env = buildSandboxToolchainEnv()
   const transcriptEntries = [...processState.transcriptEntries]
+  await updateProgress(params.progressContext, 3, "Generating DeepSec report...", params.devUrl)
   const run = async (label: string, command: string, timeoutMs?: number) => {
     timer.start(label)
     try {
