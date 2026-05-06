@@ -882,7 +882,7 @@ function FindingDetail({ label, children }: { label: string; children: ReactNode
 function DeepSecFindingsTable({ findings }: { findings: DeepSecFindingSummary[] }) {
   return (
     <div>
-      <h2 className="mb-8 text-4xl font-bold tracking-tight text-foreground">{getDeepSecFindingsHeading(findings)}</h2>
+      <h2 className="mb-4 text-xl font-semibold text-foreground">{getDeepSecFindingsHeading(findings)}</h2>
       <div className="overflow-hidden rounded-md border border-border bg-background">
         <table className="w-full table-auto divide-y divide-border text-sm">
           <thead>

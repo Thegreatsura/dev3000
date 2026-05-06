@@ -262,6 +262,7 @@ export default function DevAgentRunClient({
   const [workerSetupError, setWorkerSetupError] = useState<WorkerSetupErrorState | null>(null)
   const [workerSetupResult, setWorkerSetupResult] = useState<RunnerValidationResult | null>(null)
   const [didOpenWorkerSetupAction, setDidOpenWorkerSetupAction] = useState(false)
+  const [shouldStartAfterWorkerSetup, setShouldStartAfterWorkerSetup] = useState(false)
   const [shareCopied, setShareCopied] = useState(false)
 
   const [repoVisibilities, setRepoVisibilities] = useState<Map<string, RepoVisibility>>(new Map())
@@ -331,11 +332,11 @@ export default function DevAgentRunClient({
 
   function normalizeSelfHostedStartError(message: string): string {
     if (/BLOB_READ_WRITE_TOKEN|Vercel Blob: No token found/i.test(message)) {
-      return "The team runner still needs a fresh deployment with its Blob connection. Retry setup to repair it."
+      return "The team runner still needs a fresh deployment with its Blob connection. Run setup again to finish it."
     }
 
     if (/Self-hosted worker returned a non-JSON response/i.test(message)) {
-      return "The team runner returned an unexpected response. Retry setup to repair it."
+      return "The team runner returned an unexpected response. Run setup again to finish configuration."
     }
 
     if (/no runner project is configured/i.test(message)) {
@@ -347,7 +348,7 @@ export default function DevAgentRunClient({
     }
 
     if (/runner project still needs its team-owned Blob setup repaired/i.test(message)) {
-      return "The team runner still needs repair before it can start runs."
+      return "The team runner still needs its team-owned Blob setup before it can start runs."
     }
 
     if (/runner is out of date|runner project is updating to the latest shell version/i.test(message)) {
@@ -390,6 +391,33 @@ export default function DevAgentRunClient({
     )
   }
 
+  function isReadyWorkerSetupResult(result: RunnerValidationResult) {
+    const workerStatus =
+      result.settings?.workerStatus ||
+      (!result.project?.workerBaseUrl
+        ? "provisioning"
+        : result.project?.missingEnvKeys?.length
+          ? "error"
+          : result.project?.shellVersionStatus === "outdated"
+            ? "outdated"
+            : "ready")
+
+    return (
+      result.installed &&
+      Boolean(result.project?.workerBaseUrl) &&
+      !result.project?.missingEnvKeys?.length &&
+      result.project?.shellVersionStatus !== "outdated" &&
+      workerStatus === "ready"
+    )
+  }
+
+  function handleWorkerSetupOpenChange(open: boolean) {
+    setIsWorkerSetupOpen(open)
+    if (!open) {
+      setShouldStartAfterWorkerSetup(false)
+    }
+  }
+
   async function installWorkerProject() {
     setIsCheckingWorker(true)
     setIsInstallingWorker(true)
@@ -423,7 +451,13 @@ export default function DevAgentRunClient({
         })
         return
       }
+      const shouldResumeRun = shouldStartAfterWorkerSetup && isReadyWorkerSetupResult(data)
       applyWorkerSetup(data)
+      if (shouldResumeRun) {
+        setShouldStartAfterWorkerSetup(false)
+        setIsWorkerSetupOpen(false)
+        await startDevAgentRun({ assumeWorkerReady: true })
+      }
     } catch (workerError) {
       setWorkerSetupError({
         message: workerError instanceof Error ? workerError.message : "Failed to install runner project."
@@ -735,7 +769,7 @@ export default function DevAgentRunClient({
     return () => controller.abort()
   }, [selectedProjectListVisibility, selectedRepoName, selectedRepoOwner])
 
-  async function startDevAgentRun() {
+  async function startDevAgentRun(options: { assumeWorkerReady?: boolean } = {}) {
     if (!selectedProject || !selectedTeam) {
       setError("Choose a project before starting.")
       return
@@ -749,9 +783,10 @@ export default function DevAgentRunClient({
       return
     }
 
-    if (isSelfHostedSkillRunner && !isReadySelfHostedSkillRunner) {
+    if (isSelfHostedSkillRunner && !isReadySelfHostedSkillRunner && !options.assumeWorkerReady) {
       setError(null)
       setWorkerSetupError(null)
+      setShouldStartAfterWorkerSetup(true)
       setIsWorkerSetupOpen(true)
       return
     }
@@ -856,6 +891,7 @@ export default function DevAgentRunClient({
         setWorkerSetupError({
           message: normalizeSelfHostedStartError(result.error)
         })
+        setShouldStartAfterWorkerSetup(true)
         setIsWorkerSetupOpen(true)
         setError(null)
         return
@@ -872,8 +908,9 @@ export default function DevAgentRunClient({
   }
 
   async function continueAfterWorkerSetup() {
+    setShouldStartAfterWorkerSetup(false)
     setIsWorkerSetupOpen(false)
-    await startDevAgentRun()
+    await startDevAgentRun({ assumeWorkerReady: true })
   }
 
   const workerSetupNeedsAction = Boolean(workerSetupError?.actionUrl)
@@ -1264,7 +1301,7 @@ export default function DevAgentRunClient({
 
               <div className="flex items-center gap-2 pt-1">
                 <Button
-                  onClick={startDevAgentRun}
+                  onClick={() => void startDevAgentRun()}
                   disabled={isRunning || !selectedProject}
                   size="sm"
                   className="h-8 rounded-md bg-[#ededed] px-4 text-[13px] font-medium text-[#0a0a0a] hover:bg-white disabled:opacity-40"
@@ -1277,14 +1314,14 @@ export default function DevAgentRunClient({
         </div>
       </div>
 
-      <Dialog open={isWorkerSetupOpen} onOpenChange={setIsWorkerSetupOpen}>
+      <Dialog open={isWorkerSetupOpen} onOpenChange={handleWorkerSetupOpenChange}>
         <DialogContent className="border-[#1f1f1f] bg-[#111] text-[#ededed] sm:max-w-xl">
           <DialogHeader>
             <DialogTitle className="text-[28px] font-semibold tracking-[-0.02em] text-[#ededed]">
-              Set Up Team Runner
+              Add Team Skill Runner Project
             </DialogTitle>
             <DialogDescription className="text-[#888]">
-              Before {team.name} can run this skill runner, it needs a team runner project.
+              Add a team-owned Vercel project so skill runs use {team.name}'s billing, logs, and observability.
             </DialogDescription>
           </DialogHeader>
 
@@ -1293,8 +1330,8 @@ export default function DevAgentRunClient({
               <div className="text-[11px] uppercase tracking-[0.14em] text-[#666]">Team</div>
               <div className="text-[15px] text-[#ededed]">{team.name}</div>
               <div className="leading-[20px] text-[#777]">
-                Set up the runner project for this team. If anything was partially set up before, this will repair it
-                automatically.
+                This creates a small runner project in this team. Skill runs execute there so compute, AI Gateway usage,
+                deployments, and runtime logs belong to the team running the scan.
               </div>
             </div>
 
@@ -1388,8 +1425,7 @@ export default function DevAgentRunClient({
                             </span>
                           </div>
                           <div className="text-[#666]">
-                            Blob setup should complete automatically for this runner. Retry setup to repair any partial
-                            install.
+                            Run setup again to finish the team-owned Blob connection for this runner.
                           </div>
                         </div>
                       ) : null}
@@ -1433,7 +1469,7 @@ export default function DevAgentRunClient({
                   {isInstallingWorker || isCheckingWorker ? (
                     <span className="inline-flex items-center gap-2">
                       <Loader2 className="size-3.5 animate-spin" />
-                      {workerSetupResult?.installed ? "Repairing…" : "Installing…"}
+                      {workerSetupResult?.installed ? "Configuring…" : "Installing…"}
                     </span>
                   ) : workerSetupNeedsAction && didOpenWorkerSetupAction ? (
                     "Retry Setup"

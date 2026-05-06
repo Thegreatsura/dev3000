@@ -4089,6 +4089,29 @@ if (combined) {
   process.exit(0)
 }
 
+try {
+  const findingsStat = fs.statSync(findingsDir)
+  if (findingsStat.isDirectory()) {
+    const markdown = [
+      "# DeepSec Security Scan — Summary",
+      "",
+      "## Findings: 0 total",
+      "",
+      "DeepSec completed successfully and exported no findings for this run.",
+      "",
+      "## Scan Result",
+      "",
+      "No security findings were generated from the bounded first-pass scan.",
+    ].join("\\n")
+    process.stdout.write(JSON.stringify({
+      markdown,
+      path: path.relative(root, path.join(findingsDir, "README.md")) || ".deepsec/findings/README.md",
+    }))
+    process.exit(0)
+  }
+} catch {
+}
+
 process.stdout.write(JSON.stringify(null))
 `
 

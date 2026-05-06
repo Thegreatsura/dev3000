@@ -35,6 +35,13 @@ export class SkillRunnerWorkerSetupError extends Error {
   }
 }
 
+class VercelProjectNotFoundError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "VercelProjectNotFoundError"
+  }
+}
+
 interface VercelProjectLookupResponse {
   projects?: Array<{
     id?: string
@@ -240,6 +247,19 @@ function parseVercelApiErrorPayload(value: string): VercelApiErrorPayload | null
   } catch {
     return null
   }
+}
+
+function isVercelProjectNotFoundError(error: unknown): boolean {
+  return error instanceof VercelProjectNotFoundError
+}
+
+function isProjectNotFoundApiResponse(status: number, errorText: string): boolean {
+  if (status !== 404) return false
+
+  const payload = parseVercelApiErrorPayload(errorText)
+  const code = payload?.error?.code?.trim().toLowerCase()
+  const message = payload?.error?.message?.trim()
+  return code === "not_found" && (!message || /project not found/i.test(message))
 }
 
 function buildWorkerProjectCreateError(status: number, errorText: string): Error {
@@ -641,6 +661,9 @@ async function listProjectEnvVars(accessToken: string, team: VercelTeam, project
 
   if (!response.ok) {
     const errorText = await response.text()
+    if (isProjectNotFoundApiResponse(response.status, errorText)) {
+      throw new VercelProjectNotFoundError(`Runner project disappeared while inspecting env vars: ${errorText}`)
+    }
     throw new Error(`Failed to inspect runner project env vars: ${response.status} ${errorText}`)
   }
 
@@ -860,7 +883,13 @@ async function resolveSkillRunnerWorkerProjectFromLookupProject(
     project.id,
     latestDeployment?.id,
     latestDeployment?.createdAt
-  )
+  ).catch((error: unknown) => {
+    if (isVercelProjectNotFoundError(error)) return null
+    throw error
+  })
+  if (!missingEnvKeys) {
+    return null
+  }
   const shellVersionStatus = resolveShellVersionStatus({
     desiredGitSha: desiredWorkerGitSha,
     deployedGitSha: latestDeploymentGitSha,
@@ -987,23 +1016,19 @@ export async function findSkillRunnerWorkerProject(
 async function findExistingWorkerProjectAfterCreateConflict(
   accessToken: string,
   team: VercelTeam
-): Promise<SkillRunnerWorkerProject> {
+): Promise<SkillRunnerWorkerProject | null> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const existingProject = await findSkillRunnerWorkerProject(accessToken, team)
+    const existingProject = await findSkillRunnerWorkerProject(accessToken, team).catch((error: unknown) => {
+      if (isVercelProjectNotFoundError(error)) return null
+      throw error
+    })
     if (existingProject) {
       return existingProject
     }
     await sleep(1000)
   }
 
-  throw new SkillRunnerWorkerSetupError(
-    `A ${SKILL_RUNNER_WORKER_PROJECT_NAME} project already exists in ${team.name}, but dev3000 could not inspect it for repair. Open the existing runner project in Vercel, confirm your signed-in account can manage it, or delete it and retry setup.`,
-    {
-      code: "unknown",
-      actionLabel: "Open Runner Project",
-      actionUrl: buildDashboardUrl(team, SKILL_RUNNER_WORKER_PROJECT_NAME)
-    }
-  )
+  return null
 }
 
 export async function installSkillRunnerWorkerProject(
@@ -1082,40 +1107,55 @@ export async function installSkillRunnerWorkerProject(
 }
 
 async function createWorkerProject(accessToken: string, team: VercelTeam): Promise<SkillRunnerWorkerProject> {
-  const apiUrl = new URL("https://api.vercel.com/v11/projects")
-  apiUrl.searchParams.set("teamId", team.id)
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const apiUrl = new URL("https://api.vercel.com/v11/projects")
+    apiUrl.searchParams.set("teamId", team.id)
 
-  const response = await fetch(apiUrl.toString(), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      name: SKILL_RUNNER_WORKER_PROJECT_NAME,
-      framework: "nextjs",
-      rootDirectory: SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
-      skipGitConnectDuringLink: true
-    }),
-    cache: "no-store"
-  })
+    const response = await fetch(apiUrl.toString(), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        name: SKILL_RUNNER_WORKER_PROJECT_NAME,
+        framework: "nextjs",
+        rootDirectory: SKILL_RUNNER_WORKER_ROOT_DIRECTORY,
+        skipGitConnectDuringLink: true
+      }),
+      cache: "no-store"
+    })
 
-  if (!response.ok) {
+    if (response.ok) {
+      const created = (await response.json()) as VercelProjectCreateResponse
+      if (!created.id || !created.name) {
+        throw new Error("Runner project was created but the response was incomplete.")
+      }
+
+      return {
+        projectId: created.id,
+        projectName: created.name,
+        dashboardUrl: buildDashboardUrl(team, created.name)
+      }
+    }
+
     const errorText = await response.text()
     if (response.status === 409 || /already exists|conflict/i.test(errorText)) {
-      return findExistingWorkerProjectAfterCreateConflict(accessToken, team)
+      const existing = await findExistingWorkerProjectAfterCreateConflict(accessToken, team)
+      if (existing) return existing
+      await sleep(1500 * (attempt + 1))
+      continue
     }
+
     throw buildWorkerProjectCreateError(response.status, errorText)
   }
 
-  const created = (await response.json()) as VercelProjectCreateResponse
-  if (!created.id || !created.name) {
-    throw new Error("Runner project was created but the response was incomplete.")
-  }
-
-  return {
-    projectId: created.id,
-    projectName: created.name,
-    dashboardUrl: buildDashboardUrl(team, created.name)
-  }
+  throw new SkillRunnerWorkerSetupError(
+    `Vercel still has the ${SKILL_RUNNER_WORKER_PROJECT_NAME} project name reserved for ${team.name}, but dev3000 could not inspect a live project yet. Wait a moment, then retry setup.`,
+    {
+      code: "unknown",
+      actionLabel: "Open Vercel Projects",
+      actionUrl: `https://vercel.com/${team.slug}`
+    }
+  )
 }
