@@ -1774,9 +1774,12 @@ function resolveEffectiveSandboxBinding({
   sandboxTeamId?: string
   teamId?: string
 }): { projectId?: string; teamId?: string } {
+  const runtimeProjectId = process.env.VERCEL_PROJECT_ID?.trim() || undefined
+  const runtimeTeamId = (process.env.VERCEL_ORG_ID || process.env.VERCEL_TEAM_ID)?.trim() || undefined
+
   return {
-    projectId: sandboxProjectId || projectId,
-    teamId: sandboxTeamId || teamId
+    projectId: sandboxProjectId || runtimeProjectId || projectId,
+    teamId: sandboxTeamId || runtimeTeamId || teamId
   }
 }
 
