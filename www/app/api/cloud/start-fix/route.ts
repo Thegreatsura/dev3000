@@ -53,6 +53,8 @@ const corsHeaders = {
   "Access-Control-Allow-Credentials": "true"
 }
 
+const WORKER_OIDC_EXPIRATION_BUFFER_MS = 10 * 60 * 1000
+
 type StartFixRequestBody = {
   [key: string]: unknown
   baseBranch?: string
@@ -260,7 +262,7 @@ async function resolveSelfHostedWorkerOidcToken({
   if (!isSelfHostedWorker) return { source: "missing" }
 
   try {
-    const token = (await getVercelOidcToken()).trim()
+    const token = (await getVercelOidcToken({ expirationBufferMs: WORKER_OIDC_EXPIRATION_BUFFER_MS })).trim()
     if (token) {
       console.log("[Start Fix] Resolved worker OIDC token", {
         source: "worker-oidc-helper",

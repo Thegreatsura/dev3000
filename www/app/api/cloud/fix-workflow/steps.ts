@@ -48,6 +48,8 @@ const ASH_SESSION_POLL_INTERVAL_MS = 2000
 const ASH_SESSION_POLL_TIMEOUT_MS = 25 * 60 * 1000
 const ASH_DIAGNOSTIC_HTTP_TIMEOUT_MS = 8000
 const ASH_DIAGNOSTIC_SANDBOX_TIMEOUT_MS = 15000
+const AI_GATEWAY_OIDC_EXPIRATION_BUFFER_MS = 10 * 60 * 1000
+const AI_GATEWAY_OIDC_MIN_USABLE_MS = 60 * 1000
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
 const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const ANALYZE_TO_NDJSON_SCRIPT = `#!/usr/bin/env node
@@ -5064,6 +5066,69 @@ function buildAiGatewayShellExports(gatewayAuthToken: string | undefined, gatewa
   return [`export AI_GATEWAY_API_KEY=${escapedToken}`, "unset VERCEL_OIDC_TOKEN", ...commonExports]
 }
 
+function decodeJwtPayload(token: string | undefined): Record<string, unknown> | null {
+  const [, payload] = token?.split(".") || []
+  if (!payload) return null
+
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function getJwtExpirationMs(token: string | undefined): number | null {
+  const payload = decodeJwtPayload(token)
+  const exp = payload?.exp
+  return typeof exp === "number" ? exp * 1000 : null
+}
+
+function formatJwtExpiresIn(token: string | undefined): string {
+  const expiresAt = getJwtExpirationMs(token)
+  if (!expiresAt) return "unknown"
+  return `${Math.round((expiresAt - Date.now()) / 1000)}s`
+}
+
+async function resolveFreshAiGatewayAuth({
+  gatewayAuthSource,
+  gatewayAuthToken,
+  progressContext
+}: {
+  gatewayAuthSource?: string
+  gatewayAuthToken?: string
+  progressContext?: ProgressContext | null
+}): Promise<{ source?: string; token?: string }> {
+  if (!isOidcAiGatewayAuthSource(gatewayAuthSource)) {
+    return { source: gatewayAuthSource, token: gatewayAuthToken }
+  }
+
+  try {
+    const { getVercelOidcToken } = await import("@vercel/oidc")
+    const token = (await getVercelOidcToken({ expirationBufferMs: AI_GATEWAY_OIDC_EXPIRATION_BUFFER_MS })).trim()
+    if (token) {
+      await appendProgressLog(
+        progressContext,
+        `[Agent] Refreshed AI Gateway OIDC token for sandbox runtime (source=${gatewayAuthSource || "oidc"}, expiresIn=${formatJwtExpiresIn(token)})`
+      )
+      return { source: gatewayAuthSource || "oidc", token }
+    }
+  } catch (error) {
+    const expiresAt = getJwtExpirationMs(gatewayAuthToken)
+    const isMissingOrExpiring =
+      !gatewayAuthToken || !expiresAt || expiresAt - Date.now() < AI_GATEWAY_OIDC_MIN_USABLE_MS
+    const message = formatErrorMessage(error)
+    await appendProgressLog(
+      progressContext,
+      `[Agent] Failed to refresh AI Gateway OIDC token (${message}); existing token expiresIn=${formatJwtExpiresIn(gatewayAuthToken)}`
+    )
+    if (isMissingOrExpiring) {
+      throw new Error(`AI Gateway OIDC token is unavailable or expiring and could not be refreshed: ${message}`)
+    }
+  }
+
+  return { source: gatewayAuthSource, token: gatewayAuthToken }
+}
+
 function buildClaudeAiGatewayEnv(gatewayAuthToken: string, gatewayAuthSource: string): Record<string, string> {
   const baseEnv = {
     ANTHROPIC_BASE_URL: "https://ai-gateway.vercel.sh",
@@ -5859,12 +5924,14 @@ function extractAshRuntimeEvents(payload: unknown): unknown[] {
 }
 
 function summarizeAshRuntimeEvents(events: unknown[]): {
+  hasRuntimeEvents: boolean
   rawEvents: string[]
   resultText: string
   usage: AshRuntimeUsage
 } {
   let finalCompletedMessage = ""
   let lastCompletedMessage = ""
+  let hasRuntimeEvents = false
   let promptTokens = 0
   let completionTokens = 0
   let cacheReadTokens = 0
@@ -5891,6 +5958,9 @@ function summarizeAshRuntimeEvents(events: unknown[]): {
     if (!eventRecord) continue
 
     const type = typeof eventRecord.type === "string" ? eventRecord.type : ""
+    if (type) {
+      hasRuntimeEvents = true
+    }
     const data = asRecord(eventRecord.data) || eventRecord
     if (type === "message.completed") {
       const message =
@@ -5917,6 +5987,7 @@ function summarizeAshRuntimeEvents(events: unknown[]): {
   }
 
   return {
+    hasRuntimeEvents,
     rawEvents,
     resultText: finalCompletedMessage || lastCompletedMessage,
     usage: {
@@ -6009,6 +6080,11 @@ async function pollAshRuntimeSession(
           const events = await fetchAshRuntimeSessionEvents(baseUrl, authorization, sessionId).catch(() => [])
           const eventSummary = summarizeAshRuntimeEvents(events)
           const resultText = extractAshRuntimeTextFromPayload(response.payload) || eventSummary.resultText
+          if (!resultText && !eventSummary.hasRuntimeEvents && eventSummary.usage.totalTokens === 0) {
+            throw new Error(
+              `ASH runtime session ${sessionId} completed without agent output after stream fallback. Treating this as a failed analysis session.`
+            )
+          }
           await appendProgressLog(
             progressContext,
             `[Agent] Analysis session completed${resultText ? `: ${formatClaudeOutputPreview(resultText, 180)}` : "."}`
@@ -6399,6 +6475,12 @@ function isAshRuntimeStreamDisconnectError(error: unknown): boolean {
   )
 }
 
+function isAshRuntimeAuthFailure(error: unknown): boolean {
+  return /AI Gateway authentication failed|Invalid OIDC token|invalid[^\n]*oidc|unauthorized|(^|[^\d])401([^\d]|$)|(^|[^\d])403([^\d]|$)/i.test(
+    formatErrorMessage(error)
+  )
+}
+
 function isAshRuntimeRetryableStreamHttpFailure(status: number, bodyText: string): boolean {
   if (status < 500 || status > 599) {
     return false
@@ -6514,6 +6596,22 @@ async function streamAshRuntimeTask(
       diagnostics
     )
   } catch (error) {
+    if (isAshRuntimeAuthFailure(error)) {
+      const message = formatErrorMessage(error)
+      const diagnosticText = diagnostics ? await diagnostics(sessionId).catch(() => "") : ""
+      await appendProgressLog(
+        progressContext,
+        `[ASH] Runtime stream failed authentication; not falling back to session polling (${formatClaudeOutputPreview(message, 220)})`
+      )
+      throw new Error(
+        [
+          `ASH runtime failed to authenticate with AI Gateway: ${message}`,
+          diagnosticText ? `Diagnostics:\n${diagnosticText}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      )
+    }
     await appendProgressLog(
       progressContext,
       `[ASH] Runtime stream unavailable; polling session (${formatClaudeOutputPreview(formatErrorMessage(error), 220)})`
@@ -8394,8 +8492,15 @@ async function runAgentWithDiagnoseTool(
       devAgentInstructions,
       devAgentActionSteps
     })
+  const resolvedGatewayAuth = await resolveFreshAiGatewayAuth({
+    gatewayAuthSource,
+    gatewayAuthToken,
+    progressContext
+  })
+  const effectiveGatewayAuthToken = resolvedGatewayAuth.token
+  const effectiveGatewayAuthSource = resolvedGatewayAuth.source
 
-  if (gatewayAuthSource) {
+  if (effectiveGatewayAuthSource) {
     await appendProgressLog(progressContext, "[Agent] AI Gateway connected")
   }
 
@@ -8425,8 +8530,8 @@ async function runAgentWithDiagnoseTool(
         devAgentSkillRefs,
         devAgentAshTarballUrl,
         bundleBaselineSummary,
-        gatewayAuthToken,
-        gatewayAuthSource,
+        effectiveGatewayAuthToken,
+        effectiveGatewayAuthSource,
         progressContext
       )
     } catch (ashRuntimeError) {
@@ -8507,8 +8612,8 @@ async function runAgentWithDiagnoseTool(
           sessionId: currentSessionId,
           systemPrompt: currentSessionId ? undefined : systemPrompt,
           modelId: modelSelection.modelId,
-          gatewayAuthToken,
-          gatewayAuthSourceLabel: gatewayAuthSource,
+          gatewayAuthToken: effectiveGatewayAuthToken,
+          gatewayAuthSourceLabel: effectiveGatewayAuthSource,
           progressContext
         })
       } catch (error) {
