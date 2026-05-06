@@ -11,6 +11,7 @@
  * Step 2 (Fix):  Agent iterates with diagnose→fix→verify until done
  */
 
+import { sleep } from "workflow"
 import { readBlobJson } from "@/lib/blob-store"
 import type { DevAgentAshCompiledSpec, DevAgentEarlyExitRule, DevAgentSkillRef } from "@/lib/dev-agents"
 import { isSelfHostedSkillRunnerRuntime } from "@/lib/skill-runner-runtime"
@@ -585,6 +586,77 @@ export async function cloudFixWorkflow(params: {
         initResult.fromSnapshot,
         initResult.snapshotId
       )
+    } else if (isDeepsecSecurityScan) {
+      workflowLog("[Workflow] Step 2: DeepSec security scan...")
+      const deepSecStepParams = {
+        sandboxId: activeSandboxId,
+        devUrl: initResult.devUrl,
+        initD3kLogs: initResult.initD3kLogs,
+        projectName,
+        reportId,
+        startPath,
+        repoUrl: repoUrl || "https://github.com/vercel-labs/dev3000",
+        repoBranch,
+        projectId,
+        teamId,
+        sandboxProjectId,
+        sandboxTeamId,
+        githubPat,
+        npmToken,
+        sourceTarballUrl,
+        sourceLabel,
+        vercelOidcToken,
+        gatewayAuthToken,
+        gatewayAuthSource,
+        projectDir,
+        repoOwner,
+        repoName,
+        customPrompt,
+        devAgentName,
+        devAgentInstructions: effectiveDevAgentInstructions,
+        devAgentAshTarballUrl,
+        devAgentExecutionMode: effectiveDevAgentExecutionMode,
+        devAgentSandboxBrowser: effectiveDevAgentSandboxBrowser,
+        devAgentDevServerCommand: effectiveDevAgentDevServerCommand,
+        devAgentSkillRefs: effectiveDevAgentSkillRefs,
+        progressContext,
+        initTiming: combinedInitTiming,
+        fromSnapshot: initResult.fromSnapshot,
+        snapshotId: initResult.snapshotId,
+        devAgentSuccessEval: effectiveDevAgentSuccessEval
+      } satisfies Parameters<typeof import("./steps").deepSecPrepareStep>[0]
+
+      const preparedState = await deepSecPrepare(deepSecStepParams)
+      let processState = await deepSecStartProcess(
+        { ...deepSecStepParams, sandboxId: preparedState.sandboxId, projectDir: preparedState.projectDir },
+        preparedState
+      )
+      let completedProcessState: import("./steps").DeepSecProcessPollState | null = null
+      for (let pollIndex = 0; pollIndex < 60; pollIndex++) {
+        await sleep("30s")
+        const nextPollState = await deepSecPollProcess(
+          { ...deepSecStepParams, sandboxId: processState.sandboxId, projectDir: processState.projectDir },
+          processState
+        )
+        processState = nextPollState
+        if (nextPollState.done) {
+          completedProcessState = nextPollState
+          break
+        }
+      }
+      if (!completedProcessState) {
+        throw new Error("DeepSec process did not complete within 30 minutes.")
+      }
+
+      fixResult = await deepSecFinalize(
+        {
+          ...deepSecStepParams,
+          sandboxId: completedProcessState.sandboxId,
+          projectDir: completedProcessState.projectDir
+        },
+        preparedState,
+        completedProcessState
+      )
     } else {
       // ============================================================
       // STEP 2: Agent Fix Loop - Single step with internal iteration
@@ -969,6 +1041,42 @@ async function evaluateEarlyExit(
     gatewayAuthSource,
     progressContext
   )
+}
+
+async function deepSecPrepare(
+  params: Parameters<typeof import("./steps").deepSecPrepareStep>[0]
+): Promise<import("./steps").DeepSecPreparedState> {
+  "use step"
+  const { deepSecPrepareStep } = await import("./steps")
+  return deepSecPrepareStep(params)
+}
+
+async function deepSecStartProcess(
+  params: Parameters<typeof import("./steps").deepSecStartProcessStep>[0],
+  preparedState: import("./steps").DeepSecPreparedState
+): Promise<import("./steps").DeepSecProcessState> {
+  "use step"
+  const { deepSecStartProcessStep } = await import("./steps")
+  return deepSecStartProcessStep(params, preparedState)
+}
+
+async function deepSecPollProcess(
+  params: Parameters<typeof import("./steps").deepSecPollProcessStep>[0],
+  processState: import("./steps").DeepSecProcessState
+): Promise<import("./steps").DeepSecProcessPollState> {
+  "use step"
+  const { deepSecPollProcessStep } = await import("./steps")
+  return deepSecPollProcessStep(params, processState)
+}
+
+async function deepSecFinalize(
+  params: Parameters<typeof import("./steps").deepSecFinalizeStep>[0],
+  preparedState: import("./steps").DeepSecPreparedState,
+  processState: import("./steps").DeepSecProcessPollState
+): Promise<FixResult> {
+  "use step"
+  const { deepSecFinalizeStep } = await import("./steps")
+  return deepSecFinalizeStep(params, preparedState, processState)
 }
 
 async function agentFixLoop(

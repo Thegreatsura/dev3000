@@ -1763,6 +1763,23 @@ function getVercelApiTokenCandidates(explicitToken?: string): string[] {
   )
 }
 
+function resolveEffectiveSandboxBinding({
+  projectId,
+  sandboxProjectId,
+  sandboxTeamId,
+  teamId
+}: {
+  projectId?: string
+  sandboxProjectId?: string
+  sandboxTeamId?: string
+  teamId?: string
+}): { projectId?: string; teamId?: string } {
+  return {
+    projectId: sandboxProjectId || projectId,
+    teamId: sandboxTeamId || teamId
+  }
+}
+
 function isVercelAuthFailure(error: unknown): boolean {
   const apiError = error as {
     message?: string
@@ -4091,13 +4108,37 @@ function isSuccessfulDeepSecGeneratedReport(markdown: string | undefined): boole
   ].some((failureSignal) => normalized.includes(failureSignal))
 }
 
-type DeepSecCommandTranscriptEntry = {
+export type DeepSecCommandTranscriptEntry = {
   command: string
   durationMs: number
   exitCode: number
   label: string
   stderr: string
   stdout: string
+}
+
+export interface DeepSecPreparedState {
+  sandboxId: string
+  projectDir?: string
+  transcriptEntries: DeepSecCommandTranscriptEntry[]
+  timing: AgentStepTiming
+}
+
+export interface DeepSecProcessState {
+  sandboxId: string
+  projectDir?: string
+  processStateDir: string
+  transcriptEntries: DeepSecCommandTranscriptEntry[]
+  startedAt: string
+  pid: string | null
+}
+
+export interface DeepSecProcessPollState extends DeepSecProcessState {
+  done: boolean
+  elapsedSeconds: number
+  exitCode: number | null
+  lastStdout: string
+  lastStderr: string
 }
 
 function buildDeepSecEnv(gatewayAuthToken: string, gatewayAuthSource: string): Record<string, string> {
@@ -4398,6 +4439,548 @@ async function runDeepSecCliScanInSandbox({
   }
 }
 
+type DeepSecStepParams = {
+  sandboxId: string
+  devUrl: string
+  initD3kLogs: string
+  projectName: string
+  reportId: string
+  startPath: string
+  repoUrl: string
+  repoBranch: string
+  projectId?: string
+  teamId?: string
+  sandboxProjectId?: string
+  sandboxTeamId?: string
+  githubPat?: string
+  npmToken?: string
+  sourceTarballUrl?: string
+  sourceLabel?: string
+  vercelOidcToken?: string
+  gatewayAuthToken?: string
+  gatewayAuthSource?: string
+  projectDir?: string
+  repoOwner?: string
+  repoName?: string
+  customPrompt?: string
+  devAgentName?: string
+  devAgentInstructions?: string
+  devAgentAshTarballUrl?: string
+  devAgentExecutionMode?: "dev-server" | "preview-pr"
+  devAgentSandboxBrowser?: "none" | "agent-browser"
+  devAgentDevServerCommand?: string
+  devAgentSkillRefs?: DevAgentSkillRef[]
+  progressContext?: ProgressContext | null
+  initTiming?: InitStepTiming
+  fromSnapshot?: boolean
+  snapshotId?: string
+  devAgentSuccessEval?: string
+}
+
+async function reconnectDeepSecSandbox(
+  params: DeepSecStepParams,
+  options: { allowRecreate: boolean }
+): Promise<{ sandbox: Sandbox; recreatedSandbox: boolean; effectiveProjectDir?: string }> {
+  const vercelApiTokens = getVercelApiTokenCandidates(params.vercelOidcToken)
+  const effectiveSandboxBinding = resolveEffectiveSandboxBinding({
+    projectId: params.projectId,
+    sandboxProjectId: params.sandboxProjectId,
+    sandboxTeamId: params.sandboxTeamId,
+    teamId: params.teamId
+  })
+
+  try {
+    const sandbox = await getRunningSandboxWithRetry(params.sandboxId, params.progressContext, "agent", 3, 2000, {
+      teamId: effectiveSandboxBinding.teamId,
+      projectId: effectiveSandboxBinding.projectId,
+      tokens: vercelApiTokens
+    })
+    return { sandbox, recreatedSandbox: false, effectiveProjectDir: params.projectDir }
+  } catch (error) {
+    if (!options.allowRecreate) {
+      throw error
+    }
+
+    await appendProgressLog(params.progressContext, "[Agent] Previous sandbox unavailable, creating a fresh one...")
+    const freshResult = await createSandboxWithTokenFallback(
+      {
+        repoUrl: params.repoUrl,
+        branch: params.repoBranch,
+        githubPat: params.githubPat,
+        projectId: effectiveSandboxBinding.projectId,
+        teamId: effectiveSandboxBinding.teamId,
+        npmToken: params.npmToken,
+        sourceTarballUrl: params.sourceTarballUrl,
+        sourceLabel: params.sourceLabel,
+        projectDir: params.projectDir || "",
+        devCommand: params.devAgentDevServerCommand,
+        skipD3kSetup: true,
+        timeout: WORKFLOW_SANDBOX_TIMEOUT,
+        debug: true,
+        onProgress: (message) => appendProgressLog(params.progressContext, `[Sandbox] ${message}`)
+      },
+      vercelApiTokens,
+      params.progressContext,
+      "agent"
+    )
+    await appendProgressLog(params.progressContext, `[Agent] Fresh sandbox ready: ${freshResult.sandbox.sandboxId}`)
+    return { sandbox: freshResult.sandbox, recreatedSandbox: true, effectiveProjectDir: params.projectDir }
+  }
+}
+
+export async function deepSecPrepareStep(params: DeepSecStepParams): Promise<DeepSecPreparedState> {
+  const timer = new StepTimer()
+  await updateProgress(params.progressContext, 3, "Running DeepSec security scan...", params.devUrl)
+
+  timer.start("Reconnect to sandbox")
+  const { sandbox, recreatedSandbox, effectiveProjectDir } = await reconnectDeepSecSandbox(params, {
+    allowRecreate: true
+  })
+  timer.end()
+
+  if (recreatedSandbox) {
+    await appendProgressLog(params.progressContext, "[Agent] Preparing skills...")
+    await installDevAgentSkillsInSandbox(
+      sandbox,
+      effectiveProjectDir,
+      params.devAgentSkillRefs,
+      params.progressContext,
+      {
+        devAgentAshTarballUrl: params.devAgentAshTarballUrl,
+        includeD3k: false
+      }
+    )
+  }
+
+  const projectRoot = getSandboxProjectRoot(effectiveProjectDir)
+  const env = buildSandboxToolchainEnv()
+  const transcriptEntries: DeepSecCommandTranscriptEntry[] = []
+  const run = async (label: string, command: string, timeoutMs?: number) => {
+    timer.start(label)
+    try {
+      transcriptEntries.push(
+        await runDeepSecCommandInSandbox(sandbox, projectRoot, label, command, env, params.progressContext, timeoutMs)
+      )
+    } finally {
+      timer.end()
+    }
+  }
+
+  await appendProgressLog(params.progressContext, "[DeepSec] Preparing deterministic DeepSec CLI workflow")
+  await run(
+    "Initialize workspace",
+    "if [ ! -d .deepsec ]; then npx --yes deepsec@latest init; else echo '.deepsec already exists'; fi",
+    180000
+  )
+  await run("Install DeepSec dependencies", "cd .deepsec && corepack pnpm install", 180000)
+  await run("Install Claude Agent SDK native binary", `cd .deepsec && ${buildDeepSecNativeBinaryScript()}`, 180000)
+  await run("Write project context", `node -e ${shellEscape(buildDeepSecInfoWriterScript(projectRoot))}`, 60000)
+  await run("Scan candidates", "cd .deepsec && corepack pnpm deepsec scan", 300000)
+
+  const timing = timer.getData()
+  return {
+    sandboxId: sandbox.sandboxId,
+    projectDir: effectiveProjectDir,
+    transcriptEntries,
+    timing
+  }
+}
+
+export async function deepSecStartProcessStep(
+  params: DeepSecStepParams,
+  preparedState: DeepSecPreparedState
+): Promise<DeepSecProcessState> {
+  const sandboxParams = { ...params, sandboxId: preparedState.sandboxId, projectDir: preparedState.projectDir }
+  const { sandbox, effectiveProjectDir } = await reconnectDeepSecSandbox(sandboxParams, { allowRecreate: false })
+  const resolvedGatewayAuth = await resolveFreshAiGatewayAuth({
+    gatewayAuthSource: params.gatewayAuthSource,
+    gatewayAuthToken: params.gatewayAuthToken,
+    progressContext: params.progressContext
+  })
+  const token = requireAiGatewayAuthToken(resolvedGatewayAuth.token)
+  const authSource = resolvedGatewayAuth.source || getAiGatewayAuthSource(resolvedGatewayAuth.token)
+  const env = buildDeepSecEnv(token, authSource)
+  const projectRoot = getSandboxProjectRoot(effectiveProjectDir)
+  const processStateDir = `${projectRoot}/.deepsec/.dev3000-run/${params.reportId}`
+  const processCommand = "cd .deepsec && corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3"
+  const startedAtMs = Date.now()
+
+  await appendProgressLog(params.progressContext, "[Agent] AI Gateway connected")
+  await appendProgressLog(params.progressContext, "[DeepSec] Process candidates...")
+
+  const startScript = [
+    `STATE_DIR=${shellEscape(processStateDir)}`,
+    'mkdir -p "$STATE_DIR"',
+    'rm -f "$STATE_DIR"/process.out "$STATE_DIR"/process.err "$STATE_DIR"/process.exit "$STATE_DIR"/process.pid "$STATE_DIR"/process.started',
+    'date +%s > "$STATE_DIR/process.started"',
+    "(",
+    "  cd .deepsec &&",
+    '  nohup sh -lc \'corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3\' > "$STATE_DIR/process.out" 2> "$STATE_DIR/process.err"',
+    '  printf "%s" "$?" > "$STATE_DIR/process.exit"',
+    ") </dev/null >/dev/null 2>&1 &",
+    "PID=$!",
+    'printf "%s" "$PID" > "$STATE_DIR/process.pid"',
+    'echo "DeepSec process started pid=$PID"'
+  ].join("\n")
+
+  const result = await runSandboxCommandWithOptions(
+    sandbox,
+    {
+      cmd: "sh",
+      args: ["-lc", startScript],
+      cwd: projectRoot,
+      env
+    },
+    { timeoutMs: 15000 }
+  )
+
+  if (result.exitCode !== 0) {
+    await appendProgressLog(
+      params.progressContext,
+      `[DeepSec] Failed to start process step: ${formatClaudeOutputPreview(result.stderr || result.stdout, 500)}`
+    )
+    throw new Error(
+      `DeepSec failed to start process step: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`
+    )
+  }
+
+  const pidMatch = result.stdout.match(/pid=(\d+)/)
+  const pid = pidMatch?.[1] || null
+  await appendProgressLog(params.progressContext, `[DeepSec] Process candidates started${pid ? ` (pid=${pid})` : ""}`)
+
+  const transcriptEntries = [
+    ...preparedState.transcriptEntries,
+    {
+      command: processCommand,
+      durationMs: Date.now() - startedAtMs,
+      exitCode: 0,
+      label: "Process candidates",
+      stderr: result.stderr.trim(),
+      stdout: result.stdout.trim()
+    }
+  ]
+
+  return {
+    sandboxId: preparedState.sandboxId,
+    projectDir: effectiveProjectDir,
+    processStateDir,
+    transcriptEntries,
+    startedAt: new Date(startedAtMs).toISOString(),
+    pid
+  }
+}
+
+export async function deepSecPollProcessStep(
+  params: DeepSecStepParams,
+  processState: DeepSecProcessState
+): Promise<DeepSecProcessPollState> {
+  const sandboxParams = { ...params, sandboxId: processState.sandboxId, projectDir: processState.projectDir }
+  const { sandbox } = await reconnectDeepSecSandbox(sandboxParams, { allowRecreate: false })
+  const pollScript = `
+const fs = require("node:fs")
+const path = require("node:path")
+const stateDir = ${JSON.stringify(processState.processStateDir)}
+function read(name) {
+  try {
+    return fs.readFileSync(path.join(stateDir, name), "utf8").trim()
+  } catch {
+    return ""
+  }
+}
+function tail(name, max = 6000) {
+  try {
+    const value = fs.readFileSync(path.join(stateDir, name), "utf8")
+    return value.length > max ? value.slice(value.length - max) : value
+  } catch {
+    return ""
+  }
+}
+const pid = read("process.pid")
+const exitRaw = read("process.exit")
+const startedRaw = read("process.started")
+const startedSeconds = Number(startedRaw) || Math.floor(Date.parse(${JSON.stringify(processState.startedAt)}) / 1000)
+let running = false
+if (pid && !exitRaw) {
+  try {
+    process.kill(Number(pid), 0)
+    running = true
+  } catch {}
+}
+const exitCode = exitRaw ? Number(exitRaw) : null
+process.stdout.write(JSON.stringify({
+  pid: pid || null,
+  running,
+  lost: Boolean(pid && !running && exitCode === null),
+  exitCode,
+  elapsedSeconds: Math.max(0, Math.round(Date.now() / 1000 - startedSeconds)),
+  stdoutTail: tail("process.out"),
+  stderrTail: tail("process.err")
+}))
+`
+  const result = await runSandboxCommandWithOptions(
+    sandbox,
+    {
+      cmd: "node",
+      args: ["-e", pollScript],
+      env: buildSandboxToolchainEnv()
+    },
+    { timeoutMs: 15000 }
+  )
+  if (result.exitCode !== 0) {
+    throw new Error(`Failed to poll DeepSec process: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`)
+  }
+
+  const parsed = JSON.parse(result.stdout.trim()) as {
+    elapsedSeconds: number
+    exitCode: number | null
+    lost: boolean
+    pid: string | null
+    running: boolean
+    stderrTail: string
+    stdoutTail: string
+  }
+  const lastStdout = parsed.stdoutTail.trim()
+  const lastStderr = parsed.stderrTail.trim()
+
+  if (parsed.lost) {
+    await appendProgressLog(
+      params.progressContext,
+      `[DeepSec] Process candidates stopped without an exit code: ${formatClaudeOutputPreview(lastStderr || lastStdout, 500)}`
+    )
+    throw new Error(`DeepSec process stopped without an exit code: ${lastStderr || lastStdout || "no output"}`)
+  }
+
+  if (parsed.running || parsed.exitCode === null) {
+    await appendProgressLog(
+      params.progressContext,
+      `[DeepSec] Process candidates still running (${parsed.elapsedSeconds}s elapsed)`
+    )
+    return {
+      ...processState,
+      done: false,
+      elapsedSeconds: parsed.elapsedSeconds,
+      exitCode: parsed.exitCode,
+      lastStdout,
+      lastStderr
+    }
+  }
+
+  const processEntry: DeepSecCommandTranscriptEntry = {
+    command: "cd .deepsec && corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3",
+    durationMs: parsed.elapsedSeconds * 1000,
+    exitCode: parsed.exitCode,
+    label: "Process candidates",
+    stderr: lastStderr,
+    stdout: lastStdout
+  }
+  const transcriptEntries = [
+    ...processState.transcriptEntries.filter((entry) => entry.label !== "Process candidates"),
+    processEntry
+  ]
+
+  if (parsed.exitCode !== 0) {
+    await appendProgressLog(
+      params.progressContext,
+      `[DeepSec] Process candidates failed exit=${parsed.exitCode}: ${formatClaudeOutputPreview(lastStderr || lastStdout, 500)}`
+    )
+    throw new Error(`DeepSec process failed: ${lastStderr || lastStdout || `exit ${parsed.exitCode}`}`)
+  }
+
+  await appendProgressLog(params.progressContext, `[DeepSec] Process candidates completed (${parsed.elapsedSeconds}s)`)
+  return {
+    ...processState,
+    transcriptEntries,
+    done: true,
+    elapsedSeconds: parsed.elapsedSeconds,
+    exitCode: parsed.exitCode,
+    lastStdout,
+    lastStderr
+  }
+}
+
+export async function deepSecFinalizeStep(
+  params: DeepSecStepParams,
+  preparedState: DeepSecPreparedState,
+  processState: DeepSecProcessPollState
+): Promise<{
+  sandboxId: string
+  reportBlobUrl: string
+  reportId: string
+  beforeCls: number | null
+  afterCls: number | null
+  status: "improved" | "unchanged" | "degraded" | "no-changes"
+  agentSummary: string
+  gitDiff: string | null
+  timing: AgentStepTiming
+  successEvalResult?: boolean | null
+}> {
+  const timer = new StepTimer()
+  const sandboxParams = { ...params, sandboxId: processState.sandboxId, projectDir: processState.projectDir }
+  timer.start("Reconnect to sandbox")
+  const { sandbox, effectiveProjectDir } = await reconnectDeepSecSandbox(sandboxParams, { allowRecreate: false })
+  timer.end()
+
+  const projectRoot = getSandboxProjectRoot(effectiveProjectDir)
+  const env = buildSandboxToolchainEnv()
+  const transcriptEntries = [...processState.transcriptEntries]
+  const run = async (label: string, command: string, timeoutMs?: number) => {
+    timer.start(label)
+    try {
+      transcriptEntries.push(
+        await runDeepSecCommandInSandbox(sandbox, projectRoot, label, command, env, params.progressContext, timeoutMs)
+      )
+    } finally {
+      timer.end()
+    }
+  }
+
+  await run(
+    "Generate markdown report",
+    "cd .deepsec && corepack pnpm deepsec export --format md-dir --out ./findings",
+    120000
+  )
+  await run("Capture status", "cd .deepsec && corepack pnpm deepsec status", 120000)
+
+  timer.start("Get git diff")
+  const diffResult = await runSandboxCommand(sandbox, "sh", [
+    "-c",
+    "cd /vercel/sandbox && git diff --no-color -- . ':!package.json' ':!package-lock.json' ':!pnpm-lock.yaml' 2>/dev/null || echo ''"
+  ])
+  const gitDiff = diffResult.stdout.trim() || null
+  const hasChanges = Boolean(gitDiff)
+  timer.end()
+
+  timer.start("Build report payload")
+  const deepsecGeneratedReport = await readDeepSecGeneratedReportMarkdown(
+    sandbox,
+    effectiveProjectDir,
+    params.progressContext
+  )
+  const generatedReportMarkdown = deepsecGeneratedReport?.markdown
+  if (!generatedReportMarkdown) {
+    throw new Error("DeepSec completed but did not generate a markdown report.")
+  }
+
+  const successEvalResult = isSuccessfulDeepSecGeneratedReport(generatedReportMarkdown)
+  const status = determineCodeOnlyStatus({ hasChanges })
+  const verificationStatus: WorkflowReport["verificationStatus"] = status === "no-changes" ? "unchanged" : status
+  const statusOutput = transcriptEntries.at(-1)?.stdout.trim()
+  const transcript = formatDeepSecTranscript(transcriptEntries)
+  const { skillsInstalled } = await readSandboxSkillsInfo(sandbox)
+  const afterD3kLogs = "(DeepSec workflow does not use d3k browser verification)"
+  const combinedD3kLogs = `=== Step 1: Init (before agent) ===\n${params.initD3kLogs}\n\n=== Step 2: DeepSec scan ===\n${afterD3kLogs}`
+
+  const finalizeTiming = timer.getData()
+  const processStartedAt = processState.startedAt || new Date().toISOString()
+  const agentSteps = [
+    ...preparedState.timing.steps,
+    {
+      name: "Process candidates",
+      durationMs: processState.elapsedSeconds * 1000,
+      startedAt: processStartedAt
+    },
+    ...finalizeTiming.steps
+  ]
+  const agentMs = agentSteps.reduce((total, step) => total + step.durationMs, 0)
+  const timing: AgentStepTiming = {
+    totalMs: agentMs,
+    steps: agentSteps
+  }
+  const initMs = params.initTiming?.totalMs ?? 0
+  const reportTiming: WorkflowReport["timing"] = {
+    total: {
+      initMs,
+      agentMs,
+      totalMs: initMs + agentMs
+    },
+    init: params.initTiming
+      ? {
+          sandboxCreationMs: params.initTiming.sandboxCreation.totalMs,
+          fromSnapshot: params.fromSnapshot ?? false,
+          steps: params.initTiming.steps.map((step) => ({ name: step.name, durationMs: step.durationMs }))
+        }
+      : undefined,
+    agent: {
+      steps: agentSteps.map((step) => ({ name: step.name, durationMs: step.durationMs }))
+    }
+  }
+
+  const report: WorkflowReport = {
+    id: params.reportId,
+    projectName: params.projectName,
+    timestamp: new Date().toISOString(),
+    devAgentId: params.progressContext?.devAgentId,
+    devAgentName: params.devAgentName || params.progressContext?.devAgentName,
+    devAgentDescription: params.progressContext?.devAgentDescription,
+    devAgentRevision: params.progressContext?.devAgentRevision,
+    devAgentSpecHash: params.progressContext?.devAgentSpecHash,
+    devAgentExecutionMode: params.devAgentExecutionMode || params.progressContext?.devAgentExecutionMode,
+    devAgentSandboxBrowser: params.devAgentSandboxBrowser || params.progressContext?.devAgentSandboxBrowser,
+    workflowType: "deepsec-security-scan",
+    devAgentPrompt: params.devAgentInstructions || undefined,
+    devAgentInstructions: params.devAgentInstructions || undefined,
+    devAgentSkills: params.devAgentSkillRefs?.length ? params.devAgentSkillRefs : undefined,
+    analysisTargetType: "vercel-project",
+    customPrompt: params.customPrompt ?? undefined,
+    systemPrompt: "[DeepSec deterministic CLI workflow]",
+    sandboxDevUrl: params.devUrl,
+    startPath: params.startPath,
+    repoUrl: params.repoUrl,
+    repoBranch: params.repoBranch,
+    projectDir: effectiveProjectDir || undefined,
+    repoOwner: params.repoOwner || undefined,
+    repoName: params.repoName || undefined,
+    verificationStatus,
+    costUsd: 0,
+    agentAnalysis: transcript,
+    agentAnalysisModel: "deepsec-cli",
+    generatedReportMarkdown,
+    generatedReportFilename: `${params.reportId}-deepsec-report.md`,
+    skillsInstalled: skillsInstalled.length > 0 ? skillsInstalled : undefined,
+    skillsLoaded: ["deepsec"],
+    gitDiff: gitDiff ?? undefined,
+    d3kLogs: combinedD3kLogs,
+    initD3kLogs: params.initD3kLogs,
+    afterD3kLogs,
+    webVitalsDiagnostics: {},
+    gatewayUsage: {
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 0
+    },
+    isMarketplaceAgent: params.progressContext?.isMarketplaceAgent || undefined,
+    successEval: params.devAgentSuccessEval || undefined,
+    successEvalResult,
+    fromSnapshot: params.fromSnapshot ?? false,
+    snapshotId: params.snapshotId,
+    timing: reportTiming
+  }
+
+  const blob = await putBlobAndBuildUrl(`report-${params.reportId}.json`, JSON.stringify(report, null, 2), {
+    contentType: "application/json",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    absoluteUrl: true
+  })
+  workflowLog(`[DeepSec] Report saved: ${blob.appUrl}`)
+  timer.end()
+
+  return {
+    sandboxId: sandbox.sandboxId,
+    reportBlobUrl: blob.appUrl,
+    reportId: params.reportId,
+    beforeCls: null,
+    afterCls: null,
+    status,
+    agentSummary: statusOutput || "DeepSec scan completed and markdown report was generated.",
+    gitDiff,
+    timing,
+    successEvalResult
+  }
+}
+
 export async function agentFixLoopStep(
   sandboxId: string,
   devUrl: string,
@@ -4464,6 +5047,12 @@ export async function agentFixLoopStep(
   })
 
   const vercelApiTokens = getVercelApiTokenCandidates(vercelOidcToken)
+  const effectiveSandboxBinding = resolveEffectiveSandboxBinding({
+    projectId: _projectId,
+    sandboxProjectId,
+    sandboxTeamId,
+    teamId: _teamId
+  })
 
   timer.start("Reconnect to sandbox")
   workflowLog(`[Agent] Reconnecting to sandbox: ${sandboxId}`)
@@ -4473,8 +5062,8 @@ export async function agentFixLoopStep(
   let recreatedSandbox = false
   try {
     sandbox = await getRunningSandboxWithRetry(sandboxId, progressContext, "agent", 3, 2000, {
-      teamId: sandboxTeamId,
-      projectId: sandboxProjectId,
+      teamId: effectiveSandboxBinding.teamId,
+      projectId: effectiveSandboxBinding.projectId,
       tokens: vercelApiTokens
     })
   } catch (sandboxError) {
@@ -4489,8 +5078,8 @@ export async function agentFixLoopStep(
           repoUrl,
           branch: repoBranch,
           githubPat,
-          projectId: sandboxProjectId,
-          teamId: sandboxTeamId,
+          projectId: effectiveSandboxBinding.projectId,
+          teamId: effectiveSandboxBinding.teamId,
           npmToken,
           sourceTarballUrl,
           sourceLabel,
