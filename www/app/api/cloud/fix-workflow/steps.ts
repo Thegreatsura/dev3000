@@ -7216,7 +7216,7 @@ function buildWorkflowSpecificExecutionGuidance({
       "This is a code-only DeepSec workflow. Do not start a dev server or use browser/Web Vitals tooling.",
       "Run DeepSec from the target project checkout and keep the durable setup under `.deepsec/`.",
       "Use the environment-provided AI Gateway credentials. Do not write credentials into `.env.local` or tracked files.",
-      "After installing `.deepsec` dependencies with pnpm, run `node node_modules/@anthropic-ai/claude-code/install.cjs` from `.deepsec/` and verify `node_modules/.bin/claude --version` before processing.",
+      "After installing `.deepsec` dependencies with pnpm, run `timeout 90s node node_modules/@anthropic-ai/claude-code/install.cjs` from `.deepsec/` and verify `node_modules/.bin/claude --version` before processing. If `timeout` is unavailable, use an equivalent Node child_process timeout wrapper; never run `install.cjs` unbounded.",
       "Use the default bounded processing pass unless the user explicitly requested a full scan.",
       "If DeepSec processing fails, stop and report the failure instead of generating a fallback report.",
       "Export markdown findings or create a no-findings README only after DeepSec processing succeeds."

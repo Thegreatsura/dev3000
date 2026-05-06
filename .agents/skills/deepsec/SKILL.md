@@ -26,7 +26,7 @@ Use this skill to turn the manual DeepSec workflow into a repeatable dev3000 run
    - If `.deepsec/` already exists, do not force overwrite it.
 3. Install DeepSec workspace dependencies:
    - Run `corepack pnpm install` from `.deepsec/`.
-   - Run `node node_modules/@anthropic-ai/claude-code/install.cjs` from `.deepsec/` so pnpm's ignored build-script policy does not leave Claude Code's native binary as a stub.
+   - Run `timeout 90s node node_modules/@anthropic-ai/claude-code/install.cjs` from `.deepsec/` so pnpm's ignored build-script policy does not leave Claude Code's native binary as a stub, but never let postinstall hang indefinitely. If `timeout` is unavailable, use an equivalent Node child_process timeout wrapper instead of running `install.cjs` unbounded.
    - Verify `node_modules/.bin/claude --version` succeeds before processing.
    - If `corepack pnpm` is unavailable, run `pnpm install` only after confirming `pnpm` exists.
 4. Fill the generated project context:
