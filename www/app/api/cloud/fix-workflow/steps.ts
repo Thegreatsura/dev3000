@@ -52,6 +52,9 @@ const AI_GATEWAY_OIDC_EXPIRATION_BUFFER_MS = 10 * 60 * 1000
 const AI_GATEWAY_OIDC_MIN_USABLE_MS = 60 * 1000
 const DEEPSEC_PROCESS_TIMEOUT_MS = 25 * 60 * 1000
 const DEEPSEC_COMMAND_TIMEOUT_MS = 5 * 60 * 1000
+const DEEPSEC_PROCESS_INNER_COMMAND = "corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3"
+const DEEPSEC_PROCESS_COMMAND = `cd .deepsec && ${DEEPSEC_PROCESS_INNER_COMMAND}`
+const DEEPSEC_PROCESS_AUTH_RESTART_LIMIT = 4
 const D3K_SKILL_INSTALL_ARG = "vercel-labs/dev3000@d3k"
 const VERCEL_PLUGIN_INSTALL_ARG = "vercel/vercel-plugin"
 const ANALYZE_TO_NDJSON_SCRIPT = `#!/usr/bin/env node
@@ -4198,6 +4201,7 @@ export interface DeepSecProcessState {
   transcriptEntries: DeepSecCommandTranscriptEntry[]
   startedAt: string
   pid: string | null
+  authRestartCount?: number
 }
 
 export interface DeepSecProcessPollState extends DeepSecProcessState {
@@ -4212,10 +4216,67 @@ function buildDeepSecEnv(gatewayAuthToken: string, gatewayAuthSource: string): R
   return {
     ...buildSandboxToolchainEnv(),
     ...buildClaudeAiGatewayEnv(gatewayAuthToken, gatewayAuthSource),
-    AI_GATEWAY_API_KEY: gatewayAuthToken,
+    ...(isOidcAiGatewayAuthSource(gatewayAuthSource) ? {} : { AI_GATEWAY_API_KEY: gatewayAuthToken }),
     OPENAI_API_KEY: gatewayAuthToken,
     OPENAI_BASE_URL: "https://ai-gateway.vercel.sh/v1",
     CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1"
+  }
+}
+
+function isDeepSecAiGatewayAuthFailure(output: string): boolean {
+  return /AI Gateway|Failed to authenticate|Authentication failed|Invalid OIDC token|invalid[^\n]*oidc|AI_GATEWAY_API_KEY|VERCEL_OIDC_TOKEN|(^|[^\d])401([^\d]|$)|(^|[^\d])403([^\d]|$)/i.test(
+    output
+  )
+}
+
+async function startDeepSecProcessInSandbox({
+  env,
+  processStateDir,
+  projectRoot,
+  sandbox
+}: {
+  env: Record<string, string>
+  processStateDir: string
+  projectRoot: string
+  sandbox: Sandbox
+}): Promise<{ pid: string | null; stderr: string; stdout: string }> {
+  const startScript = [
+    `STATE_DIR=${shellEscape(processStateDir)}`,
+    'mkdir -p "$STATE_DIR"',
+    'rm -f "$STATE_DIR"/process.out "$STATE_DIR"/process.err "$STATE_DIR"/process.exit "$STATE_DIR"/process.pid "$STATE_DIR"/process.started',
+    'date +%s > "$STATE_DIR/process.started"',
+    "(",
+    "  cd .deepsec &&",
+    `  nohup sh -lc ${shellEscape(DEEPSEC_PROCESS_INNER_COMMAND)} > "$STATE_DIR/process.out" 2> "$STATE_DIR/process.err"`,
+    '  printf "%s" "$?" > "$STATE_DIR/process.exit"',
+    ") </dev/null >/dev/null 2>&1 &",
+    "PID=$!",
+    'printf "%s" "$PID" > "$STATE_DIR/process.pid"',
+    'echo "DeepSec process started pid=$PID"'
+  ].join("\n")
+
+  const result = await runSandboxCommandWithOptions(
+    sandbox,
+    {
+      cmd: "sh",
+      args: ["-lc", startScript],
+      cwd: projectRoot,
+      env
+    },
+    { timeoutMs: 15000 }
+  )
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `DeepSec failed to start process step: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`
+    )
+  }
+
+  const pidMatch = result.stdout.match(/pid=(\d+)/)
+  return {
+    pid: pidMatch?.[1] || null,
+    stderr: result.stderr.trim(),
+    stdout: result.stdout.trim()
   }
 }
 
@@ -4475,11 +4536,7 @@ async function runDeepSecCliScanInSandbox({
   await run("Install Claude Agent SDK native binary", `cd .deepsec && ${buildDeepSecNativeBinaryScript()}`, 180000)
   await run("Write project context", `node -e ${shellEscape(buildDeepSecInfoWriterScript(projectRoot))}`, 60000)
   await run("Scan candidates", "cd .deepsec && corepack pnpm deepsec scan", 300000)
-  await run(
-    "Process candidates",
-    "cd .deepsec && corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3",
-    DEEPSEC_PROCESS_TIMEOUT_MS
-  )
+  await run("Process candidates", DEEPSEC_PROCESS_COMMAND, DEEPSEC_PROCESS_TIMEOUT_MS)
   await run(
     "Generate markdown report",
     "cd .deepsec && corepack pnpm deepsec export --format md-dir --out ./findings",
@@ -4706,62 +4763,40 @@ export async function deepSecStartProcessStep(
   const env = buildDeepSecEnv(token, authSource)
   const projectRoot = getSandboxProjectRoot(effectiveProjectDir)
   const processStateDir = `${projectRoot}/.deepsec/.dev3000-run/${params.reportId}`
-  const processCommand = "cd .deepsec && corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3"
   const startedAtMs = Date.now()
 
   await updateProgress(params.progressContext, 3, "Processing DeepSec candidates...", params.devUrl)
   await appendProgressLog(params.progressContext, "[Agent] AI Gateway connected")
   await appendProgressLog(params.progressContext, "[DeepSec] Process candidates...")
 
-  const startScript = [
-    `STATE_DIR=${shellEscape(processStateDir)}`,
-    'mkdir -p "$STATE_DIR"',
-    'rm -f "$STATE_DIR"/process.out "$STATE_DIR"/process.err "$STATE_DIR"/process.exit "$STATE_DIR"/process.pid "$STATE_DIR"/process.started',
-    'date +%s > "$STATE_DIR/process.started"',
-    "(",
-    "  cd .deepsec &&",
-    '  nohup sh -lc \'corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3\' > "$STATE_DIR/process.out" 2> "$STATE_DIR/process.err"',
-    '  printf "%s" "$?" > "$STATE_DIR/process.exit"',
-    ") </dev/null >/dev/null 2>&1 &",
-    "PID=$!",
-    'printf "%s" "$PID" > "$STATE_DIR/process.pid"',
-    'echo "DeepSec process started pid=$PID"'
-  ].join("\n")
-
-  const result = await runSandboxCommandWithOptions(
-    sandbox,
-    {
-      cmd: "sh",
-      args: ["-lc", startScript],
-      cwd: projectRoot,
-      env
-    },
-    { timeoutMs: 15000 }
-  )
-
-  if (result.exitCode !== 0) {
+  let startedProcess: Awaited<ReturnType<typeof startDeepSecProcessInSandbox>>
+  try {
+    startedProcess = await startDeepSecProcessInSandbox({
+      env,
+      processStateDir,
+      projectRoot,
+      sandbox
+    })
+  } catch (error) {
     await appendProgressLog(
       params.progressContext,
-      `[DeepSec] Failed to start process step: ${formatClaudeOutputPreview(result.stderr || result.stdout, 500)}`
+      `[DeepSec] Failed to start process step: ${formatClaudeOutputPreview(formatErrorMessage(error), 500)}`
     )
-    throw new Error(
-      `DeepSec failed to start process step: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`
-    )
+    throw error
   }
 
-  const pidMatch = result.stdout.match(/pid=(\d+)/)
-  const pid = pidMatch?.[1] || null
+  const pid = startedProcess.pid
   await appendProgressLog(params.progressContext, `[DeepSec] Process candidates started${pid ? ` (pid=${pid})` : ""}`)
 
   const transcriptEntries = [
     ...preparedState.transcriptEntries,
     {
-      command: processCommand,
+      command: DEEPSEC_PROCESS_COMMAND,
       durationMs: Date.now() - startedAtMs,
       exitCode: 0,
       label: "Process candidates",
-      stderr: result.stderr.trim(),
-      stdout: result.stdout.trim()
+      stderr: startedProcess.stderr,
+      stdout: startedProcess.stdout
     }
   ]
 
@@ -4773,7 +4808,8 @@ export async function deepSecStartProcessStep(
     processStateDir,
     transcriptEntries,
     startedAt: new Date(startedAtMs).toISOString(),
-    pid
+    pid,
+    authRestartCount: 0
   }
 }
 
@@ -4880,7 +4916,7 @@ process.stdout.write(JSON.stringify({
   }
 
   const processEntry: DeepSecCommandTranscriptEntry = {
-    command: "cd .deepsec && corepack pnpm deepsec process --limit 25 --concurrency 2 --batch-size 3",
+    command: DEEPSEC_PROCESS_COMMAND,
     durationMs: parsed.elapsedSeconds * 1000,
     exitCode: parsed.exitCode,
     label: "Process candidates",
@@ -4893,11 +4929,71 @@ process.stdout.write(JSON.stringify({
   ]
 
   if (parsed.exitCode !== 0) {
+    const failureOutput = lastStderr || lastStdout || `exit ${parsed.exitCode}`
+    const authRestartCount = processState.authRestartCount ?? 0
+    const authSource = params.gatewayAuthSource || getAiGatewayAuthSource(params.gatewayAuthToken)
+    const canRestartForAuth =
+      isOidcAiGatewayAuthSource(authSource) &&
+      isDeepSecAiGatewayAuthFailure(failureOutput) &&
+      authRestartCount < DEEPSEC_PROCESS_AUTH_RESTART_LIMIT
+
+    if (canRestartForAuth) {
+      const nextAuthRestartCount = authRestartCount + 1
+      const restartStartedAtMs = Date.now()
+      await appendProgressLog(
+        params.progressContext,
+        `[DeepSec] AI Gateway auth expired during processing; refreshing OIDC token and retrying errored batches (${nextAuthRestartCount}/${DEEPSEC_PROCESS_AUTH_RESTART_LIMIT})`
+      )
+      const resolvedGatewayAuth = await resolveFreshAiGatewayAuth({
+        gatewayAuthSource: authSource,
+        gatewayAuthToken: params.gatewayAuthToken,
+        progressContext: params.progressContext
+      })
+      const token = requireAiGatewayAuthToken(resolvedGatewayAuth.token)
+      const refreshedAuthSource = resolvedGatewayAuth.source || getAiGatewayAuthSource(resolvedGatewayAuth.token)
+      const restartedProcess = await startDeepSecProcessInSandbox({
+        env: buildDeepSecEnv(token, refreshedAuthSource),
+        processStateDir: processState.processStateDir,
+        projectRoot: getSandboxProjectRoot(processState.projectDir),
+        sandbox
+      })
+      await appendProgressLog(
+        params.progressContext,
+        `[DeepSec] Process candidates restarted${restartedProcess.pid ? ` (pid=${restartedProcess.pid})` : ""}`
+      )
+      return {
+        ...processState,
+        authRestartCount: nextAuthRestartCount,
+        done: false,
+        elapsedSeconds: 0,
+        exitCode: null,
+        lastStderr: "",
+        lastStdout: "",
+        pid: restartedProcess.pid,
+        startedAt: new Date(restartStartedAtMs).toISOString(),
+        transcriptEntries: [
+          ...processState.transcriptEntries.filter((entry) => entry.label !== "Process candidates"),
+          {
+            ...processEntry,
+            label: `Process candidates (auth expired, attempt ${nextAuthRestartCount})`
+          },
+          {
+            command: DEEPSEC_PROCESS_COMMAND,
+            durationMs: Date.now() - restartStartedAtMs,
+            exitCode: 0,
+            label: "Process candidates",
+            stderr: restartedProcess.stderr,
+            stdout: restartedProcess.stdout
+          }
+        ]
+      }
+    }
+
     await appendProgressLog(
       params.progressContext,
       `[DeepSec] Process candidates failed exit=${parsed.exitCode}: ${formatClaudeOutputPreview(lastStderr || lastStdout, 500)}`
     )
-    throw new Error(`DeepSec process failed: ${lastStderr || lastStdout || `exit ${parsed.exitCode}`}`)
+    throw new Error(`DeepSec process failed: ${failureOutput}`)
   }
 
   await appendProgressLog(params.progressContext, `[DeepSec] Process candidates completed (${parsed.elapsedSeconds}s)`)
