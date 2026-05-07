@@ -72,8 +72,8 @@ async function persistWorkerProject(
   }
 
   const project = install
-    ? await installSkillRunnerWorkerProject(accessToken, team)
-    : await findSkillRunnerWorkerProject(accessToken, team)
+    ? await installSkillRunnerWorkerProject(accessToken, team, currentSettings?.workerProjectId)
+    : await findSkillRunnerWorkerProject(accessToken, team, currentSettings?.workerProjectId)
 
   if (!project) {
     await updateSkillRunnerTeamSettings(team, {

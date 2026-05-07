@@ -738,12 +738,16 @@ export async function POST(request: Request) {
       if (teamSettings.executionMode === "self-hosted" && !isSelfHostedWorker) {
         let workerProject: SkillRunnerWorkerProject | null = null
         try {
-          workerProject = await findSkillRunnerWorkerProject(accessToken, {
-            id: team.id,
-            slug: team.slug,
-            name: team.name,
-            isPersonal: Boolean(team.isPersonal)
-          })
+          workerProject = await findSkillRunnerWorkerProject(
+            accessToken,
+            {
+              id: team.id,
+              slug: team.slug,
+              name: team.name,
+              isPersonal: Boolean(team.isPersonal)
+            },
+            teamSettings.workerProjectId
+          )
         } catch (workerValidationError) {
           workflowError(
             "[Start Fix] Failed to validate self-hosted skill runner before forwarding:",

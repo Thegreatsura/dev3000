@@ -44,7 +44,7 @@ export async function GET(request: Request) {
   const executionMode = settings?.executionMode || "self-hosted"
 
   try {
-    const project = await findSkillRunnerWorkerProject(accessToken, team)
+    const project = await findSkillRunnerWorkerProject(accessToken, team, settings?.workerProjectId)
     if (!project) {
       if (userIdentity) {
         void emitTelemetryEvent(
