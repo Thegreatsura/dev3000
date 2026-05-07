@@ -24,6 +24,11 @@ import {
   isVercelPluginSkillRef
 } from "@/lib/dev-agents"
 import {
+  getDeepSecTranscriptUsage,
+  getGeneratedReportCostUsd,
+  getGeneratedReportTotalTokens
+} from "@/lib/workflow-report-summary"
+import {
   listWorkflowRuns,
   persistWorkflowRun,
   type WorkflowRun,
@@ -4202,6 +4207,8 @@ export interface DeepSecProcessState {
   startedAt: string
   pid: string | null
   authRestartCount?: number
+  costUsd?: number
+  totalTokens?: number
 }
 
 export interface DeepSecProcessPollState extends DeepSecProcessState {
@@ -4856,12 +4863,28 @@ if (pid && !exitRaw) {
   } catch {}
 }
 const exitCode = exitRaw ? Number(exitRaw) : null
+const usageText = [tail("process.out", 1000000), tail("process.err", 1000000)].join("\\n").replace(/\\x1b\\[[0-9;]*m/g, "")
+let costUsd = 0
+let totalTokens = 0
+let usageMatches = 0
+const usagePattern = /Investigation complete\\s*\\([^)]*?\\$([\\d,]+(?:\\.\\d+)?)\\s+([\\d,]+(?:\\.\\d+)?)(k)?\\s+tokens\\b/gi
+for (const match of usageText.matchAll(usagePattern)) {
+  const cost = Number(match[1].replace(/,/g, ""))
+  const rawTokens = Number(match[2].replace(/,/g, ""))
+  if (Number.isFinite(cost) && cost > 0) costUsd += cost
+  if (Number.isFinite(rawTokens) && rawTokens > 0) {
+    totalTokens += match[3]?.toLowerCase() === "k" ? Math.round(rawTokens * 1000) : Math.round(rawTokens)
+  }
+  usageMatches += 1
+}
 process.stdout.write(JSON.stringify({
   pid: pid || null,
   running,
   lost: Boolean(pid && !running && exitCode === null),
   exitCode,
   elapsedSeconds: Math.max(0, Math.round(Date.now() / 1000 - startedSeconds)),
+  costUsd: usageMatches > 0 ? costUsd : null,
+  totalTokens: usageMatches > 0 ? totalTokens : null,
   stdoutTail: tail("process.out"),
   stderrTail: tail("process.err")
 }))
@@ -4882,14 +4905,22 @@ process.stdout.write(JSON.stringify({
   const parsed = JSON.parse(result.stdout.trim()) as {
     elapsedSeconds: number
     exitCode: number | null
+    costUsd: number | null
     lost: boolean
     pid: string | null
     running: boolean
     stderrTail: string
     stdoutTail: string
+    totalTokens: number | null
   }
   const lastStdout = parsed.stdoutTail.trim()
   const lastStderr = parsed.stderrTail.trim()
+  const observedCostUsd =
+    typeof parsed.costUsd === "number" && Number.isFinite(parsed.costUsd) && parsed.costUsd > 0 ? parsed.costUsd : 0
+  const observedTotalTokens =
+    typeof parsed.totalTokens === "number" && Number.isFinite(parsed.totalTokens) && parsed.totalTokens > 0
+      ? parsed.totalTokens
+      : 0
 
   if (parsed.lost) {
     await appendProgressLog(
@@ -4910,8 +4941,10 @@ process.stdout.write(JSON.stringify({
       done: false,
       elapsedSeconds: parsed.elapsedSeconds,
       exitCode: parsed.exitCode,
+      costUsd: processState.costUsd,
       lastStdout,
-      lastStderr
+      lastStderr,
+      totalTokens: processState.totalTokens
     }
   }
 
@@ -4964,6 +4997,7 @@ process.stdout.write(JSON.stringify({
       return {
         ...processState,
         authRestartCount: nextAuthRestartCount,
+        costUsd: (processState.costUsd ?? 0) + observedCostUsd || undefined,
         done: false,
         elapsedSeconds: 0,
         exitCode: null,
@@ -4971,6 +5005,7 @@ process.stdout.write(JSON.stringify({
         lastStdout: "",
         pid: restartedProcess.pid,
         startedAt: new Date(restartStartedAtMs).toISOString(),
+        totalTokens: (processState.totalTokens ?? 0) + observedTotalTokens || undefined,
         transcriptEntries: [
           ...processState.transcriptEntries.filter((entry) => entry.label !== "Process candidates"),
           {
@@ -5003,8 +5038,10 @@ process.stdout.write(JSON.stringify({
     done: true,
     elapsedSeconds: parsed.elapsedSeconds,
     exitCode: parsed.exitCode,
+    costUsd: (processState.costUsd ?? 0) + observedCostUsd || undefined,
     lastStdout,
-    lastStderr
+    lastStderr,
+    totalTokens: (processState.totalTokens ?? 0) + observedTotalTokens || undefined
   }
 }
 
@@ -5083,6 +5120,14 @@ export async function deepSecFinalizeStep(
   const verificationStatus: WorkflowReport["verificationStatus"] = status === "no-changes" ? "unchanged" : status
   const statusOutput = transcriptEntries.at(-1)?.stdout.trim()
   const transcript = formatDeepSecTranscript(transcriptEntries)
+  const transcriptUsage = getDeepSecTranscriptUsage(transcript)
+  const deepSecCostUsd =
+    processState.costUsd ?? transcriptUsage.costUsd ?? getGeneratedReportCostUsd(generatedReportMarkdown) ?? 0
+  const deepSecTotalTokens =
+    processState.totalTokens ??
+    transcriptUsage.totalTokens ??
+    getGeneratedReportTotalTokens(generatedReportMarkdown) ??
+    0
   const { skillsInstalled } = await readSandboxSkillsInfo(sandbox)
   const afterD3kLogs = "(DeepSec workflow does not use d3k browser verification)"
   const combinedD3kLogs = `=== Step 1: Init (before agent) ===\n${params.initD3kLogs}\n\n=== Step 2: DeepSec scan ===\n${afterD3kLogs}`
@@ -5148,7 +5193,7 @@ export async function deepSecFinalizeStep(
     repoOwner: params.repoOwner || undefined,
     repoName: params.repoName || undefined,
     verificationStatus,
-    costUsd: 0,
+    costUsd: deepSecCostUsd,
     agentAnalysis: transcript,
     agentAnalysisModel: "deepsec-cli",
     generatedReportMarkdown,
@@ -5165,7 +5210,7 @@ export async function deepSecFinalizeStep(
       completionTokens: 0,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
-      totalTokens: 0
+      totalTokens: deepSecTotalTokens
     },
     isMarketplaceAgent: params.progressContext?.isMarketplaceAgent || undefined,
     successEval: params.devAgentSuccessEval || undefined,

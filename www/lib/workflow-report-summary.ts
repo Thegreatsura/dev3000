@@ -88,14 +88,88 @@ export function getGeneratedReportCostUsd(markdown: string): number | null {
   return null
 }
 
+function stripAnsi(value: string): string {
+  let output = ""
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) === 27 && value[index + 1] === "[") {
+      let end = index + 2
+      while (end < value.length && /[0-9;]/.test(value[end])) {
+        end += 1
+      }
+      if (value[end] === "m") {
+        index = end
+        continue
+      }
+    }
+    output += value[index]
+  }
+  return output
+}
+
+function parseTokenCount(rawValue: string, suffix?: string): number | null {
+  const value = Number(rawValue.replace(/,/g, ""))
+  if (!Number.isFinite(value)) return null
+  return suffix?.toLowerCase() === "k" ? Math.round(value * 1000) : Math.round(value)
+}
+
+export function getGeneratedReportTotalTokens(markdown: string): number | null {
+  const contentWithoutCode = markdown.replace(/```[\s\S]*?```/g, "")
+
+  for (const rawLine of contentWithoutCode.split("\n")) {
+    const line = rawLine
+      .replace(/^[-*]\s+/, "")
+      .replace(/\*\*/g, "")
+      .trim()
+    const match = line.match(/^Cost:\s*.+?~?([\d,]+(?:\.\d+)?)(k)?\s+tokens\b/i)
+    if (!match) continue
+
+    return parseTokenCount(match[1], match[2])
+  }
+
+  return null
+}
+
+export function getDeepSecTranscriptUsage(agentAnalysis?: string): { costUsd?: number; totalTokens?: number } {
+  if (!agentAnalysis) return {}
+
+  const text = stripAnsi(agentAnalysis)
+  let costUsd = 0
+  let totalTokens = 0
+  let matches = 0
+  const investigationCompletePattern =
+    /Investigation complete\s*\([^)]*?\$([\d,]+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)(k)?\s+tokens\b/gi
+
+  for (const match of text.matchAll(investigationCompletePattern)) {
+    const cost = Number(match[1].replace(/,/g, ""))
+    const tokens = parseTokenCount(match[2], match[3])
+    if (Number.isFinite(cost) && cost > 0) {
+      costUsd += cost
+    }
+    if (typeof tokens === "number" && tokens > 0) {
+      totalTokens += tokens
+    }
+    matches += 1
+  }
+
+  return {
+    costUsd: matches > 0 && costUsd > 0 ? costUsd : undefined,
+    totalTokens: matches > 0 && totalTokens > 0 ? totalTokens : undefined
+  }
+}
+
 export function getWorkflowReportCostUsd(report: WorkflowReport): number | undefined {
+  if (typeof report.costUsd === "number" && Number.isFinite(report.costUsd) && report.costUsd > 0) {
+    return report.costUsd
+  }
+
   const generatedCost = getGeneratedReportCostUsd(getGeneratedReportMarkdown(report))
   if (typeof generatedCost === "number" && Number.isFinite(generatedCost) && generatedCost > 0) {
     return generatedCost
   }
 
-  if (typeof report.costUsd === "number" && Number.isFinite(report.costUsd) && report.costUsd > 0) {
-    return report.costUsd
+  const transcriptCost = getDeepSecTranscriptUsage(report.agentAnalysis).costUsd
+  if (typeof transcriptCost === "number" && Number.isFinite(transcriptCost) && transcriptCost > 0) {
+    return transcriptCost
   }
 
   return undefined
