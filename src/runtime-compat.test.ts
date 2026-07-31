@@ -14,7 +14,7 @@ describe("runtime compatibility", () => {
   it("loads OpenTUI only when running under Bun on macOS", () => {
     const fileContent = readSourceFile("tui-interface.ts")
 
-    expect(fileContent).toContain('process.platform === "darwin" && Boolean(process.versions?.bun)')
+    expect(fileContent).toContain('process.platform === "darwin" && process.versions?.bun')
     expect(fileContent).toContain('await import("./tui-interface-opentui.js")')
     expect(fileContent).toContain('await import("./tui-interface-impl.js")')
   })

@@ -1,8 +1,9 @@
-import { Calendar, Github, Sparkles } from "lucide-react"
+import { Calendar, Sparkles } from "lucide-react"
 import type { Metadata } from "next"
 import { cacheLife, cacheTag } from "next/cache"
 import Link from "next/link"
 import { notFound } from "next/navigation"
+import { GithubIcon } from "@/components/github-link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -170,7 +171,7 @@ export default async function VersionPage({ params }: { params: Promise<{ versio
             rel="noopener noreferrer"
           >
             <Button variant="outline" size="sm" className="gap-2">
-              <Github className="w-4 h-4" />
+              <GithubIcon className="w-4 h-4" />
               View on GitHub
             </Button>
           </Link>

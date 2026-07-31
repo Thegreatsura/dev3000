@@ -231,4 +231,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   main()
 }
 
-export { updateChangelogPage, extractHighlights, getCommitsSinceLastRelease }
+export { extractHighlights, getCommitsSinceLastRelease, updateChangelogPage }

@@ -136,7 +136,7 @@ describe("skill runner shell source manifest", () => {
       dependencies: {
         chalk: "^5.0.0"
       },
-      packageManager: "bun@1.2.5",
+      packageManager: "bun@1.3.14",
       version: "1.2.3",
       workspaces: ["www"]
     })
@@ -166,7 +166,7 @@ describe("skill runner shell source manifest", () => {
         tailwindcss: "4.2.1",
         typescript: "^5.9.3"
       },
-      packageManager: "bun@1.2.5",
+      packageManager: "bun@1.3.14",
       version: "0.1.0"
     })
     const nextConfig = 'import { withWorkflow } from "workflow/next"\n\nexport default withWorkflow({})\n'

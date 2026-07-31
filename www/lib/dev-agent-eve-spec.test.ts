@@ -25,8 +25,8 @@ describe("createDevAgentEveSource", () => {
     const eveChannel = source.files.find((file) => file.path === "agent/channels/eve.ts")?.content || ""
     const dev3000Channel = source.files.find((file) => file.path === "agent/channels/dev3000.ts")?.content || ""
 
-    expect(packageJson.dependencies?.eve).toBe("0.20.0")
-    expect(packageJson.dependencies?.ai).toBe("^7.0.0")
+    expect(packageJson.dependencies?.eve).toBe("0.27.6")
+    expect(packageJson.dependencies?.ai).toBe("^7.0.34")
     expect(source.files.some((file) => file.path === "agent/instructions.md")).toBe(true)
     expect(source.files.some((file) => file.path.startsWith("agent/system"))).toBe(false)
     expect(eveChannel).toContain('from "eve/channels/eve"')

@@ -13,10 +13,14 @@ import type {
 } from "@/lib/dev-agents"
 
 const EVE_PACKAGE_NAME = "eve"
-const EVE_PACKAGE_VERSION = "0.20.0"
-const EVE_AI_PACKAGE_VERSION = "^7.0.0"
+const EVE_PACKAGE_VERSION = "0.27.6"
+// eve 0.27.6 declares `peerDependencies: { ai: "^7.0.34" }`; keep the generated
+// runtime's ai pin within that range so in-sandbox installs satisfy the peer.
+const EVE_AI_PACKAGE_VERSION = "^7.0.34"
 const EVE_RUNTIME_VERSION = `${EVE_PACKAGE_NAME}@${EVE_PACKAGE_VERSION}`
-const EVE_ARTIFACT_FORMAT_VERSION = 18
+// Bump whenever the generated spec or its pinned runtime changes so the
+// spec-hash-keyed tarball cache regenerates (0.20.0 -> 0.27.6 bump: 18 -> 19).
+const EVE_ARTIFACT_FORMAT_VERSION = 19
 
 export interface DevAgentEveArtifact {
   framework: "eve"
@@ -1176,11 +1180,11 @@ export async function createDevAgentEveSource(input: DevAgentEveInput, revision:
           dependencies: {
             ai: EVE_AI_PACKAGE_VERSION,
             [EVE_PACKAGE_NAME]: EVE_PACKAGE_VERSION,
-            zod: "^4.3.6"
+            zod: "^4.4.3"
           },
           devDependencies: {
             "@types/node": "^24.12.2",
-            "@typescript/native-preview": "7.0.0-dev.20260320.1"
+            "@typescript/native-preview": "7.0.0-dev.20260707.2"
           }
         },
         null,

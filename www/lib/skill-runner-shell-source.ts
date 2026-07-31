@@ -6,7 +6,9 @@ import {
   resolveRunnerShellDeploymentPath
 } from "@/lib/skill-runner-shell-files"
 
-const RUNNER_SHELL_UPLOAD_CONCURRENCY = 8
+// Uploads are content-addressed by sha (Vercel /v2/files dedups server-side),
+// so higher fan-out is safe and shortens the deploy step's wall-clock.
+const RUNNER_SHELL_UPLOAD_CONCURRENCY = 12
 const RUNNER_SHELL_FETCH_TIMEOUT_MS = 30_000
 const RUNNER_SHELL_FETCH_ATTEMPTS = 3
 const RUNNER_NEXT_CONFIG_PREVIEW_COMMENTS_PATCH =
@@ -246,7 +248,7 @@ function patchRunnerRootPackageJson(content: string): string {
         version: parsed.version || "0.0.0",
         private: true,
         type: "module",
-        packageManager: parsed.packageManager || "bun@1.2.5",
+        packageManager: parsed.packageManager || "bun@1.3.14",
         workspaces: [SKILL_RUNNER_WORKER_ROOT_DIRECTORY]
       },
       null,
@@ -270,7 +272,7 @@ function patchRunnerWwwPackageJson(content: string): string {
         name: "dev3000-skill-runner",
         version: parsed.version || "0.0.0",
         private: true,
-        packageManager: parsed.packageManager || "bun@1.2.5",
+        packageManager: parsed.packageManager || "bun@1.3.14",
         scripts: {
           build: "next build --turbopack && node scripts/patch-workflow-vercel-config.mjs",
           start: "next start"

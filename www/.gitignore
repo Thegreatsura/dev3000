@@ -34,3 +34,4 @@ deepsec/
 opencode.json
 .env*.local
 .blackboxcli/
+/.swc

@@ -253,7 +253,8 @@ class D3kTUI {
     const config: CliRendererConfig = {
       useMouse: true,
       exitOnCtrlC: false,
-      useAlternateScreen: true,
+      // @opentui/core 0.4 replaced `useAlternateScreen: true` with `screenMode`.
+      screenMode: "alternate-screen",
       targetFps: 20,
       maxFps: 30
     }

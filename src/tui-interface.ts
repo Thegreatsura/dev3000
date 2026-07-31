@@ -53,7 +53,7 @@ export class DevTUI {
       // published Node CLI must only load it when running under Bun.
       // Use explicit string paths (not variables) so bun compile can statically analyze the imports
       const mod =
-        process.platform === "darwin" && Boolean(process.versions?.bun)
+        process.platform === "darwin" && process.versions?.bun
           ? await import("./tui-interface-opentui.js")
           : await import("./tui-interface-impl.js")
       const { app, updateStatus, updateAppPort, updateAppUrl, updateUpdateInfo, updateUseHttps } = await mod.runTUI(

@@ -1,5 +1,6 @@
-import { Bug, Github, Package, Sparkles, Zap } from "lucide-react"
+import { Bug, Package, Sparkles, Zap } from "lucide-react"
 import Link from "next/link"
+import { GithubIcon } from "@/components/github-link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -93,7 +94,7 @@ export function ChangelogEntry({ release, isLatest }: ChangelogEntryProps) {
               rel="noopener noreferrer"
             >
               <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground">
-                <Github className="w-4 h-4" />
+                <GithubIcon className="w-4 h-4" />
                 GitHub
               </Button>
             </Link>
